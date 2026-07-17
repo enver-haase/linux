@@ -98,5 +98,6 @@
 .set CR_RTE,        -88   /* word -22 : write = return-from-trap                   */
 .set CR_PTB,        -92   /* word -23 : page-table base (physical word idx); 0=off */
 .set CR_FAULT_ACC,  -96   /* word -24 : access type of last fault (R/W/X)          */
+.set CR_KPTB,      -100   /* word -25 : kernel page-table base (vmalloc window)    */
 
 #endif /* _ASM_SUBLEQ_REGS_H */

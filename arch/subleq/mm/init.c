@@ -81,6 +81,14 @@ void __init paging_init(void)
 	 * After this, user-mode faults vector to subleq_fault_entry -> do_page_fault.
 	 */
 	subleq_set_vector((unsigned long)subleq_fault_entry >> 2);
+
+	/*
+	 * Install the kernel page-table base (CR_KPTB) = swapper_pg_dir. Supervisor-mode
+	 * accesses to the vmalloc window (>= VMALLOC_START) are then translated through it,
+	 * so generic mm/vmalloc.c (which maps into init_mm.pgd == swapper_pg_dir) works.
+	 * The physical direct map stays identity (addresses below the window).
+	 */
+	subleq_set_kptb(__pa(swapper_pg_dir) >> 2);
 #endif
 }
 

@@ -44,3 +44,17 @@ subleq_set_vector:
 	.word	REG_R21, CR_VECTOR, .+4		/* CR_VECTOR := mem[R21] (arg1)         */
 	.word	REG_T0, REG_T0, REG_RA | INDIRECT /* return: T0=0 (branch) -> *RA        */
 	.size	subleq_set_vector, . - subleq_set_vector
+
+/*
+ * void subleq_set_kptb(unsigned long kptb_word_index)
+ *
+ * Set CR_KPTB (the kernel page-table base for the vmalloc window, a physical word
+ * index; 0 = supervisor stays fully identity). Called once during MMU bring-up with
+ * __pa(swapper_pg_dir) >> 2.
+ */
+	.globl subleq_set_kptb
+	.type subleq_set_kptb, @function
+subleq_set_kptb:
+	.word	REG_R21, CR_KPTB, .+4		/* CR_KPTB := mem[R21] (arg1)           */
+	.word	REG_T0, REG_T0, REG_RA | INDIRECT /* return: T0=0 (branch) -> *RA        */
+	.size	subleq_set_kptb, . - subleq_set_kptb

@@ -17,8 +17,11 @@
  * is always false and allocations route to contiguous kmalloc (as under NOMMU).
  */
 #ifdef CONFIG_MMU
-#define VMALLOC_START 0UL
-#define VMALLOC_END   0UL
+/* Real vmalloc window, translated in supervisor mode through CR_KPTB (see the VM's
+ * translate(): word idx >= 0x30000000). Placed above physical RAM so it never overlaps
+ * the identity direct map. */
+#define VMALLOC_START 0xC0000000UL
+#define VMALLOC_END   0xF0000000UL
 #else
 #define VMALLOC_START 0UL
 #define VMALLOC_END 0xffffffffUL
