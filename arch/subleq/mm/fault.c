@@ -24,6 +24,7 @@
 #include <linux/uaccess.h>
 #include <linux/perf_event.h>
 #include <linux/kernel.h>
+#include <linux/vmalloc.h>
 #include <asm/traps.h>
 
 /* CR_FAULT_ACC access types (src/vm.c access_t). */
@@ -138,5 +139,8 @@ no_context:
 	 * are no fixups to try.) */
 	pr_alert("subleq: unhandled kernel page fault at 0x%08lx (cause %lu, access %lu)\n",
 		 addr, cause, access);
+	pr_alert("subleq: swapper_pg_dir=%px (pa 0x%lx, kptb word 0x%lx) init_mm.pgd=%px vmalloc 0x%lx..0x%lx\n",
+		 swapper_pg_dir, __pa(swapper_pg_dir), __pa(swapper_pg_dir) >> 2,
+		 init_mm.pgd, (unsigned long)VMALLOC_START, (unsigned long)VMALLOC_END);
 	panic("Oops: kernel page fault");
 }
