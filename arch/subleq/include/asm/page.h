@@ -10,8 +10,14 @@
 
 #include <linux/const.h>
 
-/* 16KB pages - larger pages reduce struct page count and speed up boot */
-#define PAGE_SHIFT 14
+/*
+ * 4KB pages: matches the lunatix VM MMU (4KB / 1024-word, 2-level sv32-shaped page
+ * tables; src/vm.c PAGE_SHIFT_W 10). cable's stock NOMMU used 16KB (PAGE_SHIFT 14) to
+ * reduce struct-page count / speed contiguous ELF loads; the MMU port needs 12. This is
+ * the riskiest NOMMU-visible change (docs/mmu-port-plan.md step 1) — validated by a
+ * NOMMU regression boot in isolation before any other MMU change.
+ */
+#define PAGE_SHIFT 12
 #define PAGE_SIZE (_AC(1, UL) << PAGE_SHIFT)
 #define PAGE_MASK (~(PAGE_SIZE - 1))
 

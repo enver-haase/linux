@@ -17,10 +17,15 @@
 
 #include <asm/page.h>
 
-/* Thread stack size - 16KB (one page) for sufficient stack space */
-#define THREAD_SHIFT PAGE_SHIFT
-#define THREAD_SIZE PAGE_SIZE
-#define THREAD_SIZE_ORDER 0
+/*
+ * Thread stack size - 16KB. Kept decoupled from PAGE_SIZE: cable's stock NOMMU used a
+ * 16KB page so THREAD_SIZE_ORDER 0 gave a 16KB stack. With the MMU port's 4KB page
+ * (docs/mmu-port-plan.md step 1) we hold the stack at 16KB via ORDER 2 so THREAD_SIZE
+ * stays == SUBLEQ_THREAD_SIZE (ptrace.h) and entry.S's SP masking is unchanged.
+ */
+#define THREAD_SIZE_ORDER 2
+#define THREAD_SHIFT (PAGE_SHIFT + THREAD_SIZE_ORDER)
+#define THREAD_SIZE (_AC(1, UL) << THREAD_SHIFT)
 
 #ifndef __ASSEMBLY__
 
