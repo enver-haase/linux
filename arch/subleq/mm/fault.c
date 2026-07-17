@@ -27,6 +27,7 @@
 #include <linux/vmalloc.h>
 #include <linux/linkage.h>
 #include <asm/ptrace.h>
+#include <asm/pgalloc.h>
 #include <asm/traps.h>
 
 /* CR_FAULT_ACC access types (src/vm.c access_t). */
@@ -176,4 +177,37 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 		return;
 	}
 	do_page_fault(regs, addr, cause, access);
+}
+
+/*
+ * Identity-map user virtual page 0 -> physical page 0 in a freshly exec'd mm, so the ESI
+ * register file (R21..R27 at words 25..31) — which the syscall ABI uses — is reachable by
+ * userspace and coincides with the physical register cells the trap entry reads.
+ *
+ * TEST-GRADE: physical page 0 also holds m[0]/the interrupt vectors, so this exposes them
+ * to userspace. The proper fix is relocating the user register file (Phase 3/5). Called
+ * from start_thread().
+ */
+void subleq_map_page0(struct mm_struct *mm)
+{
+	unsigned long addr = 0;
+	pgd_t *pgd;
+	p4d_t *p4d;
+	pud_t *pud;
+	pmd_t *pmd;
+	pte_t *pte;
+
+	mmap_write_lock(mm);
+	pgd = pgd_offset(mm, addr);
+	p4d = p4d_alloc(mm, pgd, addr);
+	pud = p4d ? pud_alloc(mm, p4d, addr) : NULL;
+	pmd = pud ? pmd_alloc(mm, pud, addr) : NULL;
+	if (pmd && !pte_alloc(mm, pmd)) {
+		pte = pte_offset_map(pmd, addr);
+		if (pte) {
+			set_pte_at(mm, addr, pte, pfn_pte(0, PAGE_SHARED));
+			pte_unmap(pte);
+		}
+	}
+	mmap_write_unlock(mm);
 }

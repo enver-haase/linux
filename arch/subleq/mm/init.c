@@ -89,6 +89,10 @@ void __init paging_init(void)
 	 * The physical direct map stays identity (addresses below the window).
 	 */
 	subleq_set_kptb(__pa(swapper_pg_dir) >> 2);
+
+	/* Install the user syscall gate: when a user pc reaches this vaddr the VM raises
+	 * CAUSE_SYSCALL. Fixed word index 0x2000 (byte 0x8000); userspace jumps here. */
+	subleq_set_sysgate(0x2000);
 #endif
 }
 

@@ -19,4 +19,8 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long addr,
 asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 			    unsigned long cause, unsigned long access);
 
+struct mm_struct;
+/* Identity-map user page 0 -> physical page 0 (register file) for the syscall ABI. */
+void subleq_map_page0(struct mm_struct *mm);
+
 #endif /* _ASM_SUBLEQ_TRAPS_H */

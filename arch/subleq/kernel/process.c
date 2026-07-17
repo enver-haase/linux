@@ -5,6 +5,7 @@
  * NOTE: pt_regs values are stored NEGATED. All access uses PT_REG_GET/SET macros.
  */
 
+#include <asm/traps.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/sched/task.h>
@@ -135,6 +136,12 @@ void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long sp)
 	PT_REG_SET(regs, pc, pc);
 	PT_REG_SET(regs, sp, sp);
 	/* r3 = 0 is already set by memset, marking this as a user thread */
+
+#ifdef CONFIG_MMU
+	/* Make the ESI register file (user page 0) reachable for the syscall ABI. */
+	if (current->mm)
+		subleq_map_page0(current->mm);
+#endif
 	
 	/*
 	 * CRITICAL: Mark that we're NOT in a syscall.
