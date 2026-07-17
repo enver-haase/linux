@@ -1887,10 +1887,24 @@ ret_from_fork:
          * REG_T15 | INDIRECT = 220 | 2 = 222
          */
 .Lrff_jump_user:
-        /* Indirect jump: subleq(Z, Z, T15|I) jumps to m[T15] */
+#ifdef CONFIG_MMU
+        /*
+         * MMU: a fork/clone child must ENTER MODE_USER via CR_RTE — a raw
+         * indirect jump would stay in supervisor mode (same bug fixed in
+         * jump_to_userspace). REG_T15 holds the resume PC as a WORD index
+         * (copy_thread stored the fork call's RA >> 2, since pt_regs->pc is the
+         * syscall gate address, not the resume point). Writing a CR assigns it.
+         */
+        .word   REG_T15, CR_SAVED_PC, .+4   /* CR_SAVED_PC := resume PC (word) */
+        .word   ZERO, CR_RTE, .+4           /* return-from-trap -> user @ pc   */
+.Lrff_mmu_hang:                             /* unreached (now in user mode)    */
+        .word   SW_Z, SW_Z, .Lrff_mmu_hang
+#else
+        /* NOMMU: pt_regs->pc is the resume address; raw indirect jump. */
         .word   SW_Z
         .word   SW_Z
         .word   REG_T15 | INDIRECT
+#endif
 
 .Lrff_loop:
         /* Infinite loop - should never reach here for kernel threads */

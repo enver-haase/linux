@@ -235,6 +235,27 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 		PT_REG_SET(childregs, sp, usp);
 	PT_REG_SET(childregs, r20, 0); /* Return 0 in child */
 	/* Note: r3 is NOT cleared - we use pc==0 to detect kernel threads */
+
+#ifdef CONFIG_MMU
+	/*
+	 * MMU: the parent entered fork() through the syscall gate, so its
+	 * pt_regs->pc is the gate address (byte), not the point to resume at.
+	 * The child must resume where fork() returns — the saved return address
+	 * (RA) — with r20 == 0. ret_from_fork's MMU path loads pt_regs->pc into
+	 * CR_SAVED_PC as a WORD index and RTEs, so store the word index here.
+	 */
+	PT_REG_SET(childregs, pc, PT_REG_GET(childregs, ra) >> 2);
+
+	/*
+	 * fork's dup_mmap only copies VMA-backed page tables; the ESI register
+	 * file mapping (user page 0 -> phys page 0, set by subleq_map_page0) has
+	 * no VMA, so it is NOT inherited. Re-establish it in the child's mm, or
+	 * the child faults on its first register access. (CLONE_VM shares the
+	 * mm, where it is already mapped; set_pte_at is idempotent there.)
+	 */
+	if (p->mm)
+		subleq_map_page0(p->mm);
+#endif
 	/*
 	 * Mark not in syscall for the child.
 	 * Even though the parent is in clone/fork syscall, the child is
