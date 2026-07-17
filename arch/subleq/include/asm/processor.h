@@ -18,6 +18,12 @@
 /* Where to search for free VM space during mmap */
 #define TASK_UNMAPPED_BASE (TASK_SIZE / 3)
 
+/* Top of the user stack region (== user address ceiling). */
+#ifndef STACK_TOP
+#define STACK_TOP	TASK_SIZE
+#define STACK_TOP_MAX	STACK_TOP
+#endif
+
 /*
  * Thread state structure - minimal for Subleq
  * Need to save both stack pointer and frame pointer for context switch.

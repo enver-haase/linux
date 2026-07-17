@@ -147,6 +147,11 @@ static inline pte_t pte_swp_clear_exclusive(pte_t pte)
 #define update_mmu_cache(vma, addr, ptep)			do { } while (0)
 #define update_mmu_cache_range(vmf, vma, addr, ptep, nr)	do { } while (0)
 
+#define pte_ERROR(e) \
+	pr_err("%s:%d: bad pte %08lx.\n", __FILE__, __LINE__, pte_val(e))
+#define pgd_ERROR(e) \
+	pr_err("%s:%d: bad pgd %08lx.\n", __FILE__, __LINE__, pgd_val(e))
+
 extern pgd_t swapper_pg_dir[PTRS_PER_PGD];
 
 /* Kernel is identity-mapped (super mode ignores CR_PTB); no vmalloc arena. */
