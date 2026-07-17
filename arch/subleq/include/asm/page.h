@@ -75,8 +75,13 @@ typedef struct {
 #define __pgd(x) ((pgd_t){ (x) })
 #define __pgprot(x) ((pgprot_t){ (x) })
 
-/* Page table pointer type */
+/* Page table pointer type. MMU uses page-based PTE allocation (pte_alloc_one
+ * returns a struct page); NOMMU keeps the flat pointer form. */
+#ifdef CONFIG_MMU
+typedef struct page *pgtable_t;
+#else
 typedef pte_t *pgtable_t;
+#endif
 
 #endif /* !__ASSEMBLY__ */
 
