@@ -6,4 +6,6 @@
 
 obj-y += init.o
 obj-$(CONFIG_MMU) += fault.o
-obj-y += nommu.o
+obj-$(CONFIG_MMU) += uaccess.o
+obj-$(CONFIG_MMU) += mmap.o
+obj-$(CONFIG_NOMMU) += nommu.o

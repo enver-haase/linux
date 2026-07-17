@@ -154,9 +154,9 @@ static inline pte_t pte_swp_clear_exclusive(pte_t pte)
 
 extern pgd_t swapper_pg_dir[PTRS_PER_PGD];
 
-/* Kernel is identity-mapped (super mode ignores CR_PTB); no vmalloc arena. */
-#define VMALLOC_START	0UL
-#define VMALLOC_END	0UL
+/* VMALLOC range lives in asm/vmalloc.h (empty under MMU — the identity-mapped kernel
+ * has no vmalloc arena, so is_vmalloc_addr() is always false and allocations stay
+ * contiguous). */
 
 #endif /* !__ASSEMBLY__ */
 

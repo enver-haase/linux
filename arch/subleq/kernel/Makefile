@@ -15,8 +15,9 @@ obj-y += syscall_entry.o
 obj-y += sys_subleq.o
 obj-y += tty.o
 obj-y += keyboard.o
-obj-y += binfmt_elf_subleq.o
-obj-y += elf_process_relr_section.o
+# NOMMU uses the bespoke load-time-relocated ELF loader; MMU uses generic binfmt_elf.
+obj-$(CONFIG_NOMMU) += binfmt_elf_subleq.o
+obj-$(CONFIG_NOMMU) += elf_process_relr_section.o
 obj-$(CONFIG_MMU) += subleq-cr.o
 obj-$(CONFIG_FRAMEBUFFER_CONSOLE) += fbcon.o bitblit.o direct_putcs_asm.o
 

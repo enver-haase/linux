@@ -53,6 +53,10 @@ typedef unsigned long elf_fpregset_t;
 
 #define ELF_ET_DYN_BASE (TASK_SIZE / 3 * 2)
 
+/* No hardware capability bits or platform string on the subleq machine. */
+#define ELF_HWCAP	(0)
+#define ELF_PLATFORM	(NULL)
+
 /*
  * Core dump register copy - de-negate pt_regs values for userspace tools.
  *

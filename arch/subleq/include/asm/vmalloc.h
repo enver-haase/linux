@@ -11,11 +11,18 @@
 #include <asm/pgtable.h>
 
 /*
- * NOMMU: No virtual memory, so vmalloc space is just the
- * physical address space.
+ * NOMMU: vmalloc space is just the physical address space.
+ * MMU: the kernel is identity-mapped (supervisor ignores CR_PTB) with no kernel
+ * page table, so there is no vmalloc arena. Use an EMPTY range so is_vmalloc_addr()
+ * is always false and allocations route to contiguous kmalloc (as under NOMMU).
  */
+#ifdef CONFIG_MMU
+#define VMALLOC_START 0UL
+#define VMALLOC_END   0UL
+#else
 #define VMALLOC_START 0UL
 #define VMALLOC_END 0xffffffffUL
+#endif
 
 /* Align vmalloc area on module boundary */
 #define VMALLOC_MODULE_START VMALLOC_START

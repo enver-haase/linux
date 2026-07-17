@@ -10,6 +10,18 @@
 #include <asm/page.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
+#ifdef CONFIG_MMU
+#include <asm/pgtable.h>
+#include <asm/subleq-cr.h>
+
+/* Kernel page directory (init_mm.pgd). The kernel is identity-mapped in supervisor
+ * mode, so this needs no entries — it exists only as init_mm's pgd and as the template
+ * copied into new user pgds. Page-aligned, one page (PTRS_PER_PGD * 4 = 4096). */
+pgd_t swapper_pg_dir[PTRS_PER_PGD] __aligned(PAGE_SIZE);
+
+/* The MMU fault/trap vector, defined in kernel/entry.S. */
+extern char subleq_fault_entry[];
+#endif
 
 /*
  * Memory initialization for NOMMU kernel
@@ -61,6 +73,15 @@ void __init paging_init(void)
 
 	/* Initialize memory zones - this is critical! */
 	free_area_init(max_zone_pfn);
+
+#ifdef CONFIG_MMU
+	/*
+	 * Install the fault/trap handler as CR_VECTOR (physical word index). The
+	 * kernel is identity-mapped, so the physical address is the link address.
+	 * After this, user-mode faults vector to subleq_fault_entry -> do_page_fault.
+	 */
+	subleq_set_vector((unsigned long)subleq_fault_entry >> 2);
+#endif
 }
 
 /*
