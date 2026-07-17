@@ -2997,3 +2997,289 @@ subleq_syscall_saved_ra:
 subleq_kernel_sp:
         .word   0
 
+/* =====================================================================
+ * subleq_fault_entry — lunatix MMU fault/trap vector (CR_VECTOR target)
+ *
+ * DRAFT (MMU port step 7) — UNVERIFIED until the step-8 MMU boot.
+ * Only reachable when CONFIG_MMU=y sets CR_VECTOR, so it cannot affect the
+ * NOMMU boot or the timer path.
+ *
+ * The VM enters here in supervisor mode after a USER-mode fault, having set
+ * CR_CAUSE / CR_FAULT_ADDR / CR_FAULT_ACC and saved the restart PC (the
+ * faulting instruction) in CR_SAVED_PC. Supervisor is identity-mapped and
+ * never faults, so we always arrive from user mode.
+ *
+ * Mirrors subleq_irq_entry's frame machinery (unconditional user->kernel-stack
+ * switch, negated-store pt_regs), calls do_page_fault(regs, addr, cause, access),
+ * restores, and returns via CR_RTE (re-enter user at CR_SAVED_PC -> the faulting
+ * instruction re-runs and now succeeds).
+ *
+ * KNOWN DRAFT LIMITATIONS (for the boot-debug loop):
+ *  - CR_SAVED_PC (a WORD index; note it is NOT byte-scaled like m[1]) is stashed
+ *    in the global FAULT_SAVED_PC and restored before RTE. This is not per-task,
+ *    so a reschedule inside handle_mm_fault that lets another task fault would
+ *    race; make it per-task (save/restore via pt_regs->pc, needs /4) once booting.
+ *  - Signal delivery that rewrites pt_regs->pc is not yet reflected into
+ *    CR_SAVED_PC (would need pt_regs->pc /4).
+ * ===================================================================== */
+#ifdef CONFIG_MMU
+/* Advance the running pt_regs pointer (INT_Z2) by one word and store -\reg. */
+.macro FAULT_STORE reg
+        .word   .Lconst_neg4, INT_Z2, .+4
+        .word   INT_Z2 | INDIRECT, INT_Z2 | INDIRECT, .+4
+        .word   \reg, INT_Z2 | INDIRECT, .+4
+.endm
+
+/* Advance INT_Z2 by one word and reload +\reg from the negated slot. */
+.macro FAULT_LOAD reg
+        .word   .Lconst_neg4, INT_Z2, .+4
+        .word   \reg, \reg, .+4
+        .word   INT_Z2 | INDIRECT, \reg, .+4
+.endm
+
+.text
+.globl subleq_fault_entry
+.type subleq_fault_entry, @function
+subleq_fault_entry:
+        /* --- stash the restart PC (word index) for the RTE at the end --- */
+        .word   FAULT_SAVED_PC, FAULT_SAVED_PC, .+4  /* FAULT_SAVED_PC = 0        */
+        .word   INT_Z, INT_Z, .+4                    /* INT_Z = 0                 */
+        .word   CR_SAVED_PC, INT_Z, .+4              /* INT_Z = -saved_pc (word)  */
+        .word   INT_Z, FAULT_SAVED_PC, .+4           /* FAULT_SAVED_PC = +saved_pc*/
+
+        /* --- INT_SAVED_PC (m[1]) = CR_SAVED_PC * 4 (byte addr for pt_regs->pc,
+         *     matching the timer path's pc field convention). INT_Z still = -wpc. */
+        .word   INT_SAVED_PC, INT_SAVED_PC, .+4      /* m[1] = 0                  */
+        .word   INT_Z, INT_SAVED_PC, .+4             /* m[1] += wpc  (1x)         */
+        .word   INT_Z, INT_SAVED_PC, .+4             /* m[1] += wpc  (2x)         */
+        .word   INT_Z, INT_SAVED_PC, .+4             /* m[1] += wpc  (3x)         */
+        .word   INT_Z, INT_SAVED_PC, .+4             /* m[1] += wpc  (4x) = bytepc*/
+
+        /* --- PHASE 0c: save interrupted (user) SP; then switch to kernel stack.
+         *     We always come from user mode, so the switch is unconditional
+         *     (SP = subleq_kernel_sp + 1268, same math as .Lswitch_to_kernel). */
+        .word   SAVE_SP, SAVE_SP, .+4                /* SAVE_SP = 0               */
+        .word   REG_SP, SAVE_SP, .+4                 /* SAVE_SP = -user_sp        */
+
+        .word   REG_SP, REG_SP, .+4                  /* SP = 0                    */
+        .word   INT_Z, INT_Z, .+4                    /* INT_Z = 0                 */
+        .word   subleq_kernel_sp, INT_Z, .+4         /* INT_Z = -kernel_sp        */
+        .word   .Lconst_neg1268, INT_Z, .+4          /* INT_Z = -(kernel_sp+1268) */
+        .word   INT_Z, REG_SP, .+4                   /* SP = kernel_sp + 1268     */
+
+        /* Save SYSCALL_JMPTGT / SYSCALL_SCRATCH (so a reschedule can't clobber),
+         * exactly as the timer path does at .Lsave_done. */
+        .word   .Lconst_4, REG_SP, .+4
+        .word   REG_SP | INDIRECT, REG_SP | INDIRECT, .+4
+        .word   SYSCALL_JMPTGT, REG_SP | INDIRECT, .+4
+        .word   .Lconst_4, REG_SP, .+4
+        .word   REG_SP | INDIRECT, REG_SP | INDIRECT, .+4
+        .word   SYSCALL_SCRATCH, REG_SP | INDIRECT, .+4
+
+        /* Allocate pt_regs: SP -= PT_SIZE (=236). SP now = pt_regs base. */
+        .word   .Lconst_pt_size, REG_SP, .+4
+
+        /* --- PHASE 2: build pt_regs (negated stores via running ptr INT_Z2) --- */
+        .word   INT_Z2, INT_Z2, .+4                  /* INT_Z2 = 0                */
+        .word   INT_Z, INT_Z, .+4                    /* INT_Z = 0                 */
+        .word   REG_SP, INT_Z, .+4                   /* INT_Z = -SP               */
+        .word   INT_Z, INT_Z2, .+4                   /* INT_Z2 = SP (pt_regs base)*/
+
+        /* r3 (off 0) */
+        .word   INT_Z2 | INDIRECT, INT_Z2 | INDIRECT, .+4
+        .word   REG_R3, INT_Z2 | INDIRECT, .+4
+        FAULT_STORE REG_R4          /* off 4  */
+        FAULT_STORE REG_R5          /* off 8  */
+        FAULT_STORE REG_R6          /* off 12 */
+        FAULT_STORE REG_R7          /* off 16 */
+        FAULT_STORE REG_R8          /* off 20 */
+        FAULT_STORE REG_R9          /* off 24 */
+        FAULT_STORE REG_R10         /* off 28 */
+        FAULT_STORE REG_R11         /* off 32 */
+        FAULT_STORE REG_R12         /* off 36 */
+        FAULT_STORE REG_R13         /* off 40 */
+        FAULT_STORE REG_R14         /* off 44 */
+        FAULT_STORE REG_R15         /* off 48 */
+        FAULT_STORE REG_R16         /* off 52 */
+        FAULT_STORE REG_R17         /* off 56 */
+        FAULT_STORE REG_R18         /* off 60 */
+        FAULT_STORE REG_R19         /* off 64 */
+        FAULT_STORE REG_R20         /* off 68 */
+        FAULT_STORE REG_R21         /* off 72 */
+        FAULT_STORE REG_R22         /* off 76 */
+        FAULT_STORE REG_R23         /* off 80 */
+        FAULT_STORE REG_R24         /* off 84 */
+        FAULT_STORE REG_R25         /* off 88 */
+        FAULT_STORE REG_R26         /* off 92 */
+        FAULT_STORE REG_R27         /* off 96 */
+        FAULT_STORE REG_R28         /* off 100 */
+        FAULT_STORE REG_R29         /* off 104 */
+        FAULT_STORE REG_R30         /* off 108 */
+        FAULT_STORE REG_R31         /* off 112 */
+        FAULT_STORE REG_FP          /* off 116 */
+
+        /* sp (off 120): store -user_sp. SAVE_SP = -user_sp already, so
+         * INT_Z = -SAVE_SP = +user_sp, then [ptr] = -INT_Z = -user_sp. */
+        .word   .Lconst_neg4, INT_Z2, .+4
+        .word   INT_Z, INT_Z, .+4
+        .word   SAVE_SP, INT_Z, .+4
+        .word   INT_Z2 | INDIRECT, INT_Z2 | INDIRECT, .+4
+        .word   INT_Z, INT_Z2 | INDIRECT, .+4
+
+        FAULT_STORE REG_RA          /* ra (off 124) */
+        FAULT_STORE INT_SAVED_PC    /* pc (off 128) = bytepc computed above */
+
+        /* syscall_nr (off 136) = -1 (store +1 so PT_REG_GET reads -1); skip orig_r20 */
+        .word   .Lconst_neg8, INT_Z2, .+4
+        .word   INT_Z2 | INDIRECT, INT_Z2 | INDIRECT, .+4
+        .word   .Lconst_neg1, INT_Z2 | INDIRECT, .+4
+
+        /* advance to T0 (off 160): 136 -> 160 = +24 */
+        .word   .Lconst_neg24, INT_Z2, .+4
+        .word   INT_Z2 | INDIRECT, INT_Z2 | INDIRECT, .+4
+        .word   REG_T0, INT_Z2 | INDIRECT, .+4
+        FAULT_STORE REG_T1          /* off 164 */
+        FAULT_STORE REG_T2
+        FAULT_STORE REG_T3
+        FAULT_STORE REG_T4
+        FAULT_STORE REG_T5
+        FAULT_STORE REG_T6
+        FAULT_STORE REG_T7
+        FAULT_STORE REG_T8
+        FAULT_STORE REG_T9
+        FAULT_STORE REG_T10
+        FAULT_STORE REG_T11
+        FAULT_STORE REG_T12
+        FAULT_STORE REG_T13
+        FAULT_STORE REG_T14
+        FAULT_STORE REG_T15         /* off 220 */
+        FAULT_STORE REG_Z           /* z (off 224) */
+
+        /* --- set up args and call do_page_fault(regs, addr, cause, access) --- *
+         * R21 = SP (pt_regs); R22 = CR_FAULT_ADDR*4 (byte); R23 = CR_CAUSE;
+         * R24 = CR_FAULT_ACC. */
+        .word   REG_R21, REG_R21, .+4
+        .word   INT_Z, INT_Z, .+4
+        .word   REG_SP, INT_Z, .+4
+        .word   INT_Z, REG_R21, .+4                  /* R21 = SP                  */
+
+        .word   REG_R23, REG_R23, .+4
+        .word   INT_Z, INT_Z, .+4
+        .word   CR_CAUSE, INT_Z, .+4                 /* INT_Z = -cause            */
+        .word   INT_Z, REG_R23, .+4                  /* R23 = +cause              */
+
+        .word   REG_R24, REG_R24, .+4
+        .word   INT_Z, INT_Z, .+4
+        .word   CR_FAULT_ACC, INT_Z, .+4             /* INT_Z = -acc              */
+        .word   INT_Z, REG_R24, .+4                  /* R24 = +acc                */
+
+        /* R22 = CR_FAULT_ADDR * 4 (word index -> byte address) */
+        .word   REG_R22, REG_R22, .+4                /* R22 = 0                   */
+        .word   INT_Z, INT_Z, .+4
+        .word   CR_FAULT_ADDR, INT_Z, .+4            /* INT_Z = -waddr            */
+        .word   INT_Z, REG_R22, .+4                  /* R22 += waddr (1x)         */
+        .word   INT_Z, REG_R22, .+4                  /* R22 += waddr (2x)         */
+        .word   INT_Z, REG_R22, .+4                  /* R22 += waddr (3x)         */
+        .word   INT_Z, REG_R22, .+4                  /* R22 += waddr (4x) = byte  */
+
+        /* call do_page_fault; return to .Lfault_c_returned */
+        .word   REG_RA, REG_RA, .+4
+        .word   .Lfault_return_neg, REG_RA, .+4      /* RA = .Lfault_c_returned   */
+        .word   REG_Z, REG_Z, do_page_fault
+
+.Lfault_c_returned:
+        /* --- restore pt_regs (reload each field: REG = 0; REG -= [ptr]) --- *
+         * SP was preserved by the C calling convention, so it still points at
+         * pt_regs base. Re-init INT_Z2 = SP. */
+        .word   INT_Z2, INT_Z2, .+4
+        .word   INT_Z, INT_Z, .+4
+        .word   REG_SP, INT_Z, .+4
+        .word   INT_Z, INT_Z2, .+4                   /* INT_Z2 = SP               */
+
+        /* r3 (off 0) */
+        .word   REG_R3, REG_R3, .+4
+        .word   INT_Z2 | INDIRECT, REG_R3, .+4
+        FAULT_LOAD REG_R4
+        FAULT_LOAD REG_R5
+        FAULT_LOAD REG_R6
+        FAULT_LOAD REG_R7
+        FAULT_LOAD REG_R8
+        FAULT_LOAD REG_R9
+        FAULT_LOAD REG_R10
+        FAULT_LOAD REG_R11
+        FAULT_LOAD REG_R12
+        FAULT_LOAD REG_R13
+        FAULT_LOAD REG_R14
+        FAULT_LOAD REG_R15
+        FAULT_LOAD REG_R16
+        FAULT_LOAD REG_R17
+        FAULT_LOAD REG_R18
+        FAULT_LOAD REG_R19
+        FAULT_LOAD REG_R20
+        FAULT_LOAD REG_R21
+        FAULT_LOAD REG_R22
+        FAULT_LOAD REG_R23
+        FAULT_LOAD REG_R24
+        FAULT_LOAD REG_R25
+        FAULT_LOAD REG_R26
+        FAULT_LOAD REG_R27
+        FAULT_LOAD REG_R28
+        FAULT_LOAD REG_R29
+        FAULT_LOAD REG_R30
+        FAULT_LOAD REG_R31
+        FAULT_LOAD REG_FP           /* off 116; skip sp (off 120) reload — restored below */
+        /* advance ptr past sp (120) and ra (124) to reload ra explicitly:
+         * ptr currently at 116. +8 -> 124 (ra). */
+        .word   .Lconst_neg8, INT_Z2, .+4
+        .word   REG_RA, REG_RA, .+4
+        .word   INT_Z2 | INDIRECT, REG_RA, .+4       /* ra reloaded               */
+        /* T0..T15, Z: advance from 124 to 160 = +36, then reload 17 fields */
+        .word   .Lconst_neg36, INT_Z2, .+4
+        .word   REG_T0, REG_T0, .+4
+        .word   INT_Z2 | INDIRECT, REG_T0, .+4
+        FAULT_LOAD REG_T1
+        FAULT_LOAD REG_T2
+        FAULT_LOAD REG_T3
+        FAULT_LOAD REG_T4
+        FAULT_LOAD REG_T5
+        FAULT_LOAD REG_T6
+        FAULT_LOAD REG_T7
+        FAULT_LOAD REG_T8
+        FAULT_LOAD REG_T9
+        FAULT_LOAD REG_T10
+        FAULT_LOAD REG_T11
+        FAULT_LOAD REG_T12
+        FAULT_LOAD REG_T13
+        FAULT_LOAD REG_T14
+        FAULT_LOAD REG_T15
+        FAULT_LOAD REG_Z
+
+        /* --- pop the frame: SP += PT_SIZE, then pop syscall globals --- */
+        .word   .Lconst_neg_pt_size, REG_SP, .+4
+        .word   SYSCALL_SCRATCH, SYSCALL_SCRATCH, .+4
+        .word   REG_SP | INDIRECT, SYSCALL_SCRATCH, .+4
+        .word   .Lconst_neg4, REG_SP, .+4
+        .word   SYSCALL_JMPTGT, SYSCALL_JMPTGT, .+4
+        .word   REG_SP | INDIRECT, SYSCALL_JMPTGT, .+4
+        .word   .Lconst_neg4, REG_SP, .+4
+
+        /* --- restore user SP (SAVE_SP = -user_sp) --- */
+        .word   REG_SP, REG_SP, .+4
+        .word   SAVE_SP, REG_SP, .+4                 /* SP = user_sp              */
+
+        /* --- restore CR_SAVED_PC (word index) and return-from-trap --- *
+         * CR_SAVED_PC := FAULT_SAVED_PC; then any write to CR_RTE re-enters user
+         * mode at CR_SAVED_PC (the faulting instruction re-runs). */
+        .word   FAULT_SAVED_PC, CR_SAVED_PC, .+4     /* CR_SAVED_PC := saved_pc (word idx) */
+        .word   ZERO, CR_RTE, .+4                    /* RTE: enter user mode @ CR_SAVED_PC */
+
+.Lfault_return_neg:
+        .word   -.Lfault_c_returned
+
+/* Saved restart PC (word index) across do_page_fault, for the RTE. */
+FAULT_SAVED_PC:
+        .word   0
+.type subleq_fault_entry_end, @function
+subleq_fault_entry_end:
+#endif /* CONFIG_MMU */
+

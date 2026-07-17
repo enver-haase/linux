@@ -31,3 +31,16 @@ subleq_load_ptb:
 	.word	REG_R21, CR_PTB, .+4		/* CR_PTB := mem[R21] (arg1)            */
 	.word	REG_T0, REG_T0, REG_RA | INDIRECT /* return: T0=0 (branch) -> *RA        */
 	.size	subleq_load_ptb, . - subleq_load_ptb
+
+/*
+ * void subleq_set_vector(unsigned long vector_word_index)
+ *
+ * Set CR_VECTOR (the trap/fault handler entry, a physical word index). Called once
+ * during MMU bring-up with __pa(subleq_fault_entry) >> 2.
+ */
+	.globl subleq_set_vector
+	.type subleq_set_vector, @function
+subleq_set_vector:
+	.word	REG_R21, CR_VECTOR, .+4		/* CR_VECTOR := mem[R21] (arg1)         */
+	.word	REG_T0, REG_T0, REG_RA | INDIRECT /* return: T0=0 (branch) -> *RA        */
+	.size	subleq_set_vector, . - subleq_set_vector

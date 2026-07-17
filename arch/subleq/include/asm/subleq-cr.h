@@ -13,6 +13,9 @@
 /* Load CR_PTB: the user page-table base as a physical WORD index (0 = paging off). */
 void subleq_load_ptb(unsigned long ptb_word_index);
 
+/* Set CR_VECTOR: the trap/fault handler entry as a physical WORD index. */
+void subleq_set_vector(unsigned long vector_word_index);
+
 #endif /* CONFIG_MMU */
 #endif /* __ASSEMBLY__ */
 
