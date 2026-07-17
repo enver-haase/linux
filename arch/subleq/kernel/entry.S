@@ -1920,6 +1920,26 @@ ret_from_fork:
  */
 .globl jump_to_userspace
 .type jump_to_userspace, @function
+#ifdef CONFIG_MMU
+jump_to_userspace:
+        /*
+         * MMU: enter MODE_USER via CR_RTE (a raw jump would stay in supervisor mode).
+         * R21 = user entry PC (WORD index, from process.c pc>>2), R22 = user SP (byte).
+         */
+        .word   .Lconst_neg4, REG_SP, .+4        /* pop caller return addr: SP += 4 */
+        /* SP = R22 (user stack pointer) */
+        .word   REG_SP, REG_SP, .+4
+        .word   SW_Z, SW_Z, .+4
+        .word   REG_R22, SW_Z, .+4               /* SW_Z = -R22 */
+        .word   SW_Z, REG_SP, .+4                /* SP = R22 */
+        /* CR_SAVED_PC = R21 (user entry, word index) */
+        .word   REG_R21, CR_SAVED_PC, .+4
+        /* return-from-trap: switch to MODE_USER and jump to CR_SAVED_PC */
+        .word   ZERO, CR_RTE, .+4
+.Ljtu_mmu_hang:                                  /* unreached (now in user mode) */
+        .word   SW_Z, SW_Z, .Ljtu_mmu_hang
+.size jump_to_userspace, .-jump_to_userspace
+#else
 jump_to_userspace:
         /*
          * On entry, the caller has pushed a return address to the stack.
@@ -1969,6 +1989,7 @@ jump_to_userspace:
         .word   -.Ljtu_halt_loop
 
 .size jump_to_userspace, .-jump_to_userspace
+#endif /* CONFIG_MMU */
 
 
 /*

@@ -80,7 +80,13 @@ void kernel_thread_helper(struct task_struct *prev)
 		 */
 		extern void __noreturn jump_to_userspace(unsigned long pc,
 							 unsigned long sp);
+#ifdef CONFIG_MMU
+		/* MMU: jump_to_userspace enters MODE_USER via CR_RTE, which needs the
+		 * entry as a WORD index (CR_SAVED_PC is a word index). */
+		jump_to_userspace(PT_REG_GET(regs, pc) >> 2, PT_REG_GET(regs, sp));
+#else
 		jump_to_userspace(PT_REG_GET(regs, pc), PT_REG_GET(regs, sp));
+#endif
 	}
 
 	/* Normal kernel thread completion - call do_exit */
