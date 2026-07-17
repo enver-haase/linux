@@ -18,10 +18,11 @@
  */
 #ifdef CONFIG_MMU
 /* Real vmalloc window, translated in supervisor mode through CR_KPTB (see the VM's
- * translate(): word idx >= 0x30000000). Placed above physical RAM so it never overlaps
- * the identity direct map. */
-#define VMALLOC_START 0xC0000000UL
-#define VMALLOC_END   0xF0000000UL
+ * translate(): word idx >= MEM_WORDS = 0x18000000 = byte 0x60000000). Sits just above
+ * physical RAM (1.5 GiB) and below 2 GiB — the upper bound matters because the VM's
+ * operand word index is signed (v/4), so a >=2 GiB byte address would wrap negative. */
+#define VMALLOC_START 0x60000000UL
+#define VMALLOC_END   0x78000000UL
 #else
 #define VMALLOC_START 0UL
 #define VMALLOC_END 0xffffffffUL
