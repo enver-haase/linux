@@ -46,6 +46,20 @@ subleq_set_vector:
 	.size	subleq_set_vector, . - subleq_set_vector
 
 /*
+ * void subleq_set_sysgate(unsigned long gate_word_index)
+ *
+ * Set CR_SYSGATE (the user syscall-gate vaddr, a word index; 0 = disabled). When a user
+ * program's pc reaches this vaddr the VM raises CAUSE_SYSCALL. Installed once userspace
+ * uses the trap-based syscall ABI.
+ */
+	.globl subleq_set_sysgate
+	.type subleq_set_sysgate, @function
+subleq_set_sysgate:
+	.word	REG_R21, CR_SYSGATE, .+4	/* CR_SYSGATE := mem[R21] (arg1)        */
+	.word	REG_T0, REG_T0, REG_RA | INDIRECT /* return: T0=0 (branch) -> *RA        */
+	.size	subleq_set_sysgate, . - subleq_set_sysgate
+
+/*
  * void subleq_set_kptb(unsigned long kptb_word_index)
  *
  * Set CR_KPTB (the kernel page-table base for the vmalloc window, a physical word

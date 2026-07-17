@@ -16,6 +16,9 @@ void subleq_load_ptb(unsigned long ptb_word_index);
 /* Set CR_VECTOR: the trap/fault handler entry as a physical WORD index. */
 void subleq_set_vector(unsigned long vector_word_index);
 
+/* Set CR_SYSGATE: the user syscall-gate vaddr (word index; 0 = disabled). */
+void subleq_set_sysgate(unsigned long gate_word_index);
+
 /* Set CR_KPTB: the kernel page-table base (vmalloc window) as a physical WORD index. */
 void subleq_set_kptb(unsigned long kptb_word_index);
 

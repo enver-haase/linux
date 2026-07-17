@@ -15,4 +15,8 @@ struct pt_regs;
 asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long addr,
 			      unsigned long cause, unsigned long access);
 
+/* Single CR_VECTOR entry from entry.S; dispatches syscall vs page fault. */
+asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
+			    unsigned long cause, unsigned long access);
+
 #endif /* _ASM_SUBLEQ_TRAPS_H */

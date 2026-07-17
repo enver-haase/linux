@@ -25,6 +25,8 @@
 #include <linux/perf_event.h>
 #include <linux/kernel.h>
 #include <linux/vmalloc.h>
+#include <linux/linkage.h>
+#include <asm/ptrace.h>
 #include <asm/traps.h>
 
 /* CR_FAULT_ACC access types (src/vm.c access_t). */
@@ -143,4 +145,35 @@ no_context:
 		 swapper_pg_dir, __pa(swapper_pg_dir), __pa(swapper_pg_dir) >> 2,
 		 init_mm.pgd, (unsigned long)VMALLOC_START, (unsigned long)VMALLOC_END);
 	panic("Oops: kernel page fault");
+}
+
+/*
+ * subleq_trap — the single C entry from kernel/entry.S's CR_VECTOR handler.
+ * Dispatches on the VM trap cause: a user syscall-gate trap (CAUSE_SYSCALL) vs a page
+ * fault. Keeping the dispatch in C keeps the hand-written asm entry minimal.
+ *
+ * Syscall ABI (ESI): nr = R21, args a1..a6 = R22..R27. __subleq_syscall_c does the
+ * sys_call_table dispatch + signal/restart and writes the result to pt_regs->r20.
+ * We then resume the user after the gate call, at its return address (RA), by
+ * overwriting the RTE target subleq_fault_saved_pc (word index).
+ */
+#define SUBLEQ_CAUSE_SYSCALL 3	/* must match src/vm.c CAUSE_SYSCALL */
+
+extern asmlinkage long __subleq_syscall_c(long nr, long a1, long a2, long a3,
+					  long a4, long a5, long a6);
+extern unsigned long subleq_fault_saved_pc;	/* kernel/entry.S */
+
+asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
+			    unsigned long cause, unsigned long access)
+{
+	if (cause == SUBLEQ_CAUSE_SYSCALL) {
+		__subleq_syscall_c(PT_REG_GET(regs, r21), PT_REG_GET(regs, r22),
+				   PT_REG_GET(regs, r23), PT_REG_GET(regs, r24),
+				   PT_REG_GET(regs, r25), PT_REG_GET(regs, r26),
+				   PT_REG_GET(regs, r27));
+		/* Resume in user mode at the instruction after the gate call. */
+		subleq_fault_saved_pc = PT_REG_GET(regs, ra) >> 2;
+		return;
+	}
+	do_page_fault(regs, addr, cause, access);
 }

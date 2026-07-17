@@ -3016,7 +3016,7 @@ subleq_kernel_sp:
  *
  * KNOWN DRAFT LIMITATIONS (for the boot-debug loop):
  *  - CR_SAVED_PC (a WORD index; note it is NOT byte-scaled like m[1]) is stashed
- *    in the global FAULT_SAVED_PC and restored before RTE. This is not per-task,
+ *    in the global subleq_fault_saved_pc and restored before RTE. This is not per-task,
  *    so a reschedule inside handle_mm_fault that lets another task fault would
  *    race; make it per-task (save/restore via pt_regs->pc, needs /4) once booting.
  *  - Signal delivery that rewrites pt_regs->pc is not yet reflected into
@@ -3042,10 +3042,10 @@ subleq_kernel_sp:
 .type subleq_fault_entry, @function
 subleq_fault_entry:
         /* --- stash the restart PC (word index) for the RTE at the end --- */
-        .word   FAULT_SAVED_PC, FAULT_SAVED_PC, .+4  /* FAULT_SAVED_PC = 0        */
+        .word   subleq_fault_saved_pc, subleq_fault_saved_pc, .+4  /* subleq_fault_saved_pc = 0        */
         .word   INT_Z, INT_Z, .+4                    /* INT_Z = 0                 */
         .word   CR_SAVED_PC, INT_Z, .+4              /* INT_Z = -saved_pc (word)  */
-        .word   INT_Z, FAULT_SAVED_PC, .+4           /* FAULT_SAVED_PC = +saved_pc*/
+        .word   INT_Z, subleq_fault_saved_pc, .+4           /* subleq_fault_saved_pc = +saved_pc*/
 
         /* --- INT_SAVED_PC (m[1]) = CR_SAVED_PC * 4 (byte addr for pt_regs->pc,
          *     matching the timer path's pc field convention). INT_Z still = -wpc. */
@@ -3182,10 +3182,11 @@ subleq_fault_entry:
         .word   INT_Z, REG_R22, .+4                  /* R22 += waddr (3x)         */
         .word   INT_Z, REG_R22, .+4                  /* R22 += waddr (4x) = byte  */
 
-        /* call do_page_fault; return to .Lfault_c_returned */
+        /* call subleq_trap(regs, addr, cause, access) — C dispatches syscall vs fault
+         * and, for a syscall, overwrites subleq_fault_saved_pc with the user return PC. */
         .word   REG_RA, REG_RA, .+4
         .word   .Lfault_return_neg, REG_RA, .+4      /* RA = .Lfault_c_returned   */
-        .word   REG_Z, REG_Z, do_page_fault
+        .word   REG_Z, REG_Z, subleq_trap
 
 .Lfault_c_returned:
         /* --- restore pt_regs (reload each field: REG = 0; REG -= [ptr]) --- *
@@ -3268,16 +3269,17 @@ subleq_fault_entry:
         .word   SAVE_SP, REG_SP, .+4                 /* SP = user_sp              */
 
         /* --- restore CR_SAVED_PC (word index) and return-from-trap --- *
-         * CR_SAVED_PC := FAULT_SAVED_PC; then any write to CR_RTE re-enters user
+         * CR_SAVED_PC := subleq_fault_saved_pc; then any write to CR_RTE re-enters user
          * mode at CR_SAVED_PC (the faulting instruction re-runs). */
-        .word   FAULT_SAVED_PC, CR_SAVED_PC, .+4     /* CR_SAVED_PC := saved_pc (word idx) */
+        .word   subleq_fault_saved_pc, CR_SAVED_PC, .+4     /* CR_SAVED_PC := saved_pc (word idx) */
         .word   ZERO, CR_RTE, .+4                    /* RTE: enter user mode @ CR_SAVED_PC */
 
 .Lfault_return_neg:
         .word   -.Lfault_c_returned
 
 /* Saved restart PC (word index) across do_page_fault, for the RTE. */
-FAULT_SAVED_PC:
+.globl subleq_fault_saved_pc
+subleq_fault_saved_pc:
         .word   0
 .type subleq_fault_entry_end, @function
 subleq_fault_entry_end:
