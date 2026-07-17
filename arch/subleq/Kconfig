@@ -55,7 +55,7 @@ config LOCKDEP_SUPPORT
 
 config PGTABLE_LEVELS
 	int
-	default 1
+	default 2
 
 config ARCH_FORCE_MAX_ORDER
 	int
@@ -63,8 +63,11 @@ config ARCH_FORCE_MAX_ORDER
 	help
 	  The maximum page allocation order for the buddy allocator.
 	  On NOMMU systems, ELF binaries must be loaded into contiguous
-	  memory. With 16KB pages, order 13 allows allocations up to
-	  128MB (2^13 * 16KB), which is sufficient for all practical use.
+	  memory. With 4KB pages (the MMU port's page size), order 13
+	  allows allocations up to 32MB (2^13 * 4KB), which comfortably
+	  covers the largest NOMMU-loaded binary (libc++.so.1.0, ~12MB).
+	  Contiguous-load pressure disappears once CONFIG_MMU=y (demand
+	  paging), so this cap is a NOMMU-only concern.
 
 config PHYS_ADDR_T_64BIT
 	def_bool n
