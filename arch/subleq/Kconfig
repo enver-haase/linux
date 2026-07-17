@@ -4,6 +4,7 @@
 config SUBLEQ
 	def_bool y
 	select ARCH_32BIT_OFF_T
+	select LOCK_MM_AND_FIND_VMA if MMU
 	select GENERIC_ATOMIC64
 	select THREAD_INFO_IN_TASK
 	select GENERIC_CSUM

@@ -5,4 +5,5 @@
 # for efficient memory freeing (O(log n) instead of O(n) page frees)
 
 obj-y += init.o
+obj-$(CONFIG_MMU) += fault.o
 obj-y += nommu.o
