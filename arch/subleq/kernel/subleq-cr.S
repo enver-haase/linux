@@ -1,0 +1,33 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * Control-register access helpers callable from C (lunatix VM).
+ *
+ * The subleq machine has no hardware registers; the ESI ABI designates fixed low
+ * memory words as a register file (asm/subleq-regs.h): arg1 = R21, return value = R20,
+ * return address = RA. A control register is named by an operand whose effective WORD
+ * index is negative, and the VM's CR-write path (src/vm.c is_cr) intercepts before the
+ * normal subtract — so this cannot be expressed as a C store and must be raw .word asm.
+ *
+ * Unconditional-jump idiom: `subleq Tn, Tn, target` — Tn -= Tn = 0 <= 0 always branches,
+ * and Tn is caller-saved scratch, so self-zeroing it is harmless.
+ *
+ * See docs/mmu-port-plan.md step 5.
+ */
+
+#include <asm/subleq-regs.h>
+
+	.text
+
+/*
+ * void subleq_load_ptb(unsigned long ptb_word_index)
+ *
+ * Set CR_PTB (the user page-table base, a physical word index; 0 = paging off).
+ * Called from switch_mm(). Runs in supervisor mode (all kernel code does), which is
+ * required for the CR write to be honored.
+ */
+	.globl subleq_load_ptb
+	.type subleq_load_ptb, @function
+subleq_load_ptb:
+	.word	REG_R21, CR_PTB, .+4		/* CR_PTB := mem[R21] (arg1)            */
+	.word	REG_T0, REG_T0, REG_RA | INDIRECT /* return: T0=0 (branch) -> *RA        */
+	.size	subleq_load_ptb, . - subleq_load_ptb

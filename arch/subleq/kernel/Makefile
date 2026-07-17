@@ -17,6 +17,7 @@ obj-y += tty.o
 obj-y += keyboard.o
 obj-y += binfmt_elf_subleq.o
 obj-y += elf_process_relr_section.o
+obj-$(CONFIG_MMU) += subleq-cr.o
 obj-$(CONFIG_FRAMEBUFFER_CONSOLE) += fbcon.o bitblit.o direct_putcs_asm.o
 
 
