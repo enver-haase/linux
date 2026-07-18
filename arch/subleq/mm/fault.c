@@ -180,17 +180,21 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 }
 
 /*
- * Identity-map user virtual page 0 -> physical page 0 in a freshly exec'd mm, so the ESI
- * register file (R21..R27 at words 25..31) — which the syscall ABI uses — is reachable by
- * userspace and coincides with the physical register cells the trap entry reads.
+ * Map user virtual PAGE 1 -> physical page 1 in a freshly exec'd mm. After the Phase 3/5
+ * register-file relocation the ESI register file lives in page 1 (REG_BASE, words 1024..),
+ * and the kernel's own register file is physical page 1 (identity in supervisor mode). So
+ * mapping user vpn1 -> pfn1 gives userspace its registers as the shared, context-switched
+ * register bank the trap entry reads/writes — without exposing page 0.
  *
- * TEST-GRADE: physical page 0 also holds m[0]/the interrupt vectors, so this exposes them
- * to userspace. The proper fix is relocating the user register file (Phase 3/5). Called
- * from start_thread().
+ * Page 0 (the VM interrupt vectors + kernel scratch) is deliberately LEFT UNMAPPED for
+ * userspace: NULL derefs fault (guard restored) and the timer vector can't be hijacked.
+ * (Name kept for callers; despite "page0" it now maps page 1.) Called from start_thread()
+ * and copy_thread().
  */
 void subleq_map_page0(struct mm_struct *mm)
 {
-	unsigned long addr = 0;
+	unsigned long addr = PAGE_SIZE;            /* page 1 = the relocated register file */
+	const unsigned long regfile_pfn = 1;       /* physical page 1 = shared register bank */
 	pgd_t *pgd;
 	p4d_t *p4d;
 	pud_t *pud;
@@ -205,7 +209,7 @@ void subleq_map_page0(struct mm_struct *mm)
 	if (pmd && !pte_alloc(mm, pmd)) {
 		pte = pte_offset_map(pmd, addr);
 		if (pte) {
-			set_pte_at(mm, addr, pte, pfn_pte(0, PAGE_SHARED));
+			set_pte_at(mm, addr, pte, pfn_pte(regfile_pfn, PAGE_SHARED));
 			pte_unmap(pte);
 		}
 	}
