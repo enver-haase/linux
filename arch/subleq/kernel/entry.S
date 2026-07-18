@@ -2939,6 +2939,8 @@ __subleq_syscall:
         .word   -1024
 .Lconst_neg1268:
         .word   -1268           /* kernel_sp + 1268 = pt_regs after pushes and allocation */
+.Lconst_pos1268:
+        .word   1268            /* +1268: subtract from -kernel_sp to get -(kernel_sp+1268) */
 .Lconst_neg1036:
         .word   -1036           /* SP + 1036 = pt_regs (C popped ret addr, so SP = kernel_sp - 12) */
 
@@ -3099,7 +3101,7 @@ subleq_fault_entry:
         .word   REG_SP, REG_SP, .+4                  /* SP = 0                    */
         .word   INT_Z, INT_Z, .+4                    /* INT_Z = 0                 */
         .word   subleq_kernel_sp, INT_Z, .+4         /* INT_Z = -kernel_sp        */
-        .word   .Lconst_neg1268, INT_Z, .+4          /* INT_Z = -(kernel_sp+1268) */
+        .word   .Lconst_pos1268, INT_Z, .+4          /* INT_Z = -(kernel_sp+1268) [FIX: was .Lconst_neg1268 -> built pt_regs at kernel_sp-1512, mismatching task_pt_regs] */
         .word   INT_Z, REG_SP, .+4                   /* SP = kernel_sp + 1268     */
 
         /* Save SYSCALL_JMPTGT / SYSCALL_SCRATCH (so a reschedule can't clobber),
