@@ -26,17 +26,11 @@
 .globl subleq_blit_row8
 .type subleq_blit_row8, @function
 
-/* Register definitions */
-.set REG_Z, 12
-.set REG_SP, 16
-.set REG_RA, 20
-.set REG_R21, 100       /* dst pointer (modified in place) */
-.set REG_R22, 104       /* byte (biased in place) */
-.set REG_R23, 108       /* fg (use directly) */
-.set REG_R24, 112       /* bg (use directly) */
-.set REG_T4, 176        /* scratch for -fg */
-.set REG_T5, 180        /* scratch for -bg */
-.set INDIRECT, 1
+/* Register definitions: use the shared header so the ESI register-file base
+ * (REG_BASE) tracks the toolchain relocation instead of hardcoding page 0.
+ * (Was a local .set block at page-0 addresses -> broke when the register file
+ * moved to page 1.) Provides REG_Z/SP/RA, REG_R21-R24, REG_T4/T5, INDIRECT. */
+#include <asm/subleq-regs.h>
 
 subleq_blit_row8:
         .word   .Lconst_n1, REG_R22, .+4      /* R22 += 1 (bias) */

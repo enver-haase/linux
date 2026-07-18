@@ -9,70 +9,82 @@
 #ifndef _ASM_SUBLEQ_REGS_H
 #define _ASM_SUBLEQ_REGS_H
 
-/* Interrupt control addresses */
+/* Interrupt control addresses (VM contract - NOT part of the register file,
+ * never relocated). */
 .set INT_HANDLER, 0
 .set INT_SAVED_PC, 4
 .set INT_SAVED_HANDLER, 8
 
+/*
+ * ESI register-file base, in BYTES. MUST match the toolchain's SUBLEQ_REG_BASE
+ * (words) -> REG_BASE = SUBLEQ_REG_BASE * 4, and tools/make_boot_image.py.
+ *   0    = cable's stock ABI (register file in page 0).
+ *   4096 = register file relocated to page 1 so page 0 stays reserved for the
+ *          VM I/O / interrupt vectors / kernel scratch (MMU: NULL guard + vector
+ *          protection). The kernel scratch cells (INT_Z..SYSCALL_SCRATCH, words
+ *          56-63, in entry.S) and the clock stay in page 0 and are NOT relocated.
+ */
+.set REG_BASE, 4096
+
 /* Core registers */
-.set REG_Z, 12
-.set REG_SP, 16
-.set REG_RA, 20
+.set REG_Z, REG_BASE + 12
+.set REG_SP, REG_BASE + 16
+.set REG_RA, REG_BASE + 20
 
 /* General purpose registers R3-R31 */
-.set REG_R3, 28
-.set REG_R4, 32
-.set REG_R5, 36
-.set REG_R6, 40
-.set REG_R7, 44
-.set REG_R8, 48
-.set REG_R9, 52
-.set REG_R10, 56
-.set REG_R11, 60
-.set REG_R12, 64
-.set REG_R13, 68
-.set REG_R14, 72
-.set REG_R15, 76
-.set REG_R16, 80
-.set REG_R17, 84
-.set REG_R18, 88
-.set REG_R19, 92
-.set REG_R20, 96
-.set REG_R21, 100
-.set REG_R22, 104
-.set REG_R23, 108
-.set REG_R24, 112
-.set REG_R25, 116
-.set REG_R26, 120
-.set REG_R27, 124
-.set REG_R28, 128
-.set REG_R29, 132
-.set REG_R30, 136
-.set REG_R31, 140
+.set REG_R3, REG_BASE + 28
+.set REG_R4, REG_BASE + 32
+.set REG_R5, REG_BASE + 36
+.set REG_R6, REG_BASE + 40
+.set REG_R7, REG_BASE + 44
+.set REG_R8, REG_BASE + 48
+.set REG_R9, REG_BASE + 52
+.set REG_R10, REG_BASE + 56
+.set REG_R11, REG_BASE + 60
+.set REG_R12, REG_BASE + 64
+.set REG_R13, REG_BASE + 68
+.set REG_R14, REG_BASE + 72
+.set REG_R15, REG_BASE + 76
+.set REG_R16, REG_BASE + 80
+.set REG_R17, REG_BASE + 84
+.set REG_R18, REG_BASE + 88
+.set REG_R19, REG_BASE + 92
+.set REG_R20, REG_BASE + 96
+.set REG_R21, REG_BASE + 100
+.set REG_R22, REG_BASE + 104
+.set REG_R23, REG_BASE + 108
+.set REG_R24, REG_BASE + 112
+.set REG_R25, REG_BASE + 116
+.set REG_R26, REG_BASE + 120
+.set REG_R27, REG_BASE + 124
+.set REG_R28, REG_BASE + 128
+.set REG_R29, REG_BASE + 132
+.set REG_R30, REG_BASE + 136
+.set REG_R31, REG_BASE + 140
 
 /* Read-only zero constant */
-.set ZERO, 144
+.set ZERO, REG_BASE + 144
 
 /* Frame pointer */
-.set REG_FP, 148
+.set REG_FP, REG_BASE + 148
 
 /* Temporary registers T0-T15 */
-.set REG_T0, 160
-.set REG_T1, 164
-.set REG_T2, 168
-.set REG_T3, 172
-.set REG_T4, 176
-.set REG_T5, 180
-.set REG_T6, 184
-.set REG_T7, 188
-.set REG_T8, 192
-.set REG_T9, 196
-.set REG_T10, 200
-.set REG_T11, 204
-.set REG_T12, 208
-.set REG_T13, 212
-.set REG_T14, 216
-.set REG_T15, 220
+.set REG_T0, REG_BASE + 160
+.set REG_T1, REG_BASE + 164
+.set REG_T2, REG_BASE + 168
+.set REG_T3, REG_BASE + 172
+.set REG_T4, REG_BASE + 176
+.set REG_T5, REG_BASE + 180
+.set REG_T6, REG_BASE + 184
+.set REG_T7, REG_BASE + 188
+.set REG_T8, REG_BASE + 192
+.set REG_T9, REG_BASE + 196
+.set REG_T10, REG_BASE + 200
+.set REG_T11, REG_BASE + 204
+.set REG_T12, REG_BASE + 208
+.set REG_T13, REG_BASE + 212
+.set REG_T14, REG_BASE + 216
+.set REG_T15, REG_BASE + 220
 
 /* Indirect addressing flag (OR'd with register address) */
 .set INDIRECT, 1

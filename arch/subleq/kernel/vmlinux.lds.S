@@ -35,8 +35,12 @@ jiffies = jiffies_64;
 
 SECTIONS
 {
-	/* Start at 4KB to leave room for boot area */
-	. = 0x1000;
+	/* Start at 8KB: page 0 = boot area + VM I/O / interrupt vectors / kernel
+	 * scratch; page 1 = the relocated ESI register file (REG_BASE, see
+	 * asm/subleq-regs.h). Both are reserved by setup.c (memblock_reserve 0,0x2000)
+	 * and pre-initialised by tools/make_boot_image.py, so kernel text starts at
+	 * page 2. (Was 0x1000 when the register file lived in page 0.) */
+	. = 0x2000;
 
 	_text = .;
 	_stext = .;

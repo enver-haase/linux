@@ -144,8 +144,12 @@ void __init setup_arch(char **cmdline_p)
 	/* Reserve kernel code and data */
 	memblock_reserve(__pa(_text), _end - _text);
 
-	/* Reserve low memory (boot area, registers, etc.) */
-	memblock_reserve(0, 0x1000);
+	/* Reserve low memory: page 0 = boot area + VM I/O / interrupt vectors /
+	 * kernel scratch; page 1 = the relocated ESI register file (REG_BASE, see
+	 * asm/subleq-regs.h). Kernel text starts at page 2 (vmlinux.lds.S). With the
+	 * cable-stock ABI (REG_BASE=0) only page 0 needs reserving, but reserving the
+	 * extra page is harmless. */
+	memblock_reserve(0, 0x2000);
 
 	/* Reserve framebuffer at top of memory */
 	memblock_reserve(SUBLEQ_FB_ADDR, SUBLEQ_FB_SIZE);
