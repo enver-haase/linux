@@ -65,18 +65,44 @@ subleq_irq_entry:
         .word   INT_SAVED_PC, INT_Z, .+4                  /* INT_Z = -PC */
         .word   INT_Z, .Lhazard_scratch, .+4              /* scratch = PC */
 
-        /* Check lower bound: scratch -= (start - 1); jump if <= 0 → PC < start */
-        .word   .Lconst_entry_start_m1, .Lhazard_scratch, .Lphase0a_start
+        /* Check lower bound: scratch -= (start - 1); jump if <= 0 → PC < irq_start */
+        .word   .Lconst_entry_start_m1, .Lhazard_scratch, .Lchk_fault_hazard
 
-        /* Check upper bound: scratch -= (end - start); jump if <= 0 → PC < end = IN HAZARD */
+        /* Check upper bound: scratch -= (end - start); jump if <= 0 → PC < irq_end = IN HAZARD */
         .word   .Lconst_entry_size, .Lhazard_scratch, .Lin_hazard
 
-        /* PC >= end → not self-interrupt, continue normally */
+        /* PC >= irq_end → check the MMU fault-entry range too */
+        .word   INT_Z, INT_Z, .Lchk_fault_hazard
+
+.Lchk_fault_hazard:
+#ifdef CONFIG_MMU
+        /*
+         * A timer nested into subleq_fault_entry's ASM critical section would
+         * clobber the scratch it shares with this path (INT_Z/INT_Z2/SAVE_SP/
+         * subleq_fault_saved_pc). Skip such a timer, exactly as for the IRQ entry.
+         * Reload scratch = PC (the IRQ check consumed it) and range-check
+         * [subleq_fault_entry, subleq_fault_entry_end). While the fault handler is
+         * in its C code (do_page_fault), PC is outside this range, so preemption
+         * there still works — only the hand-written entry/exit ASM is guarded.
+         */
+        .word   .Lhazard_scratch, .Lhazard_scratch, .+4  /* scratch = 0 */
+        .word   INT_Z, INT_Z, .+4                         /* INT_Z = 0 */
+        .word   INT_SAVED_PC, INT_Z, .+4                  /* INT_Z = -PC */
+        .word   INT_Z, .Lhazard_scratch, .+4              /* scratch = PC */
+        .word   .Lconst_fault_start_m1, .Lhazard_scratch, .Lphase0a_start  /* PC < fault_start → normal */
+        .word   .Lconst_fault_size, .Lhazard_scratch, .Lin_hazard          /* PC < fault_end → IN HAZARD */
+#endif
+        /* Not in either handler → not a self-interrupt, continue normally */
         .word   INT_Z, INT_Z, .Lphase0a_start
 
 .Lin_hazard:
-        /* Self-interrupt detected! Return to interrupted handler code. */
-        .word   INT_Z, INT_Z, INT_SAVED_PC | INDIRECT
+        /*
+         * Self-interrupt detected! Return to the interrupted handler code.
+         * .Lhazard_scratch is <= 0 here (from the range check that jumped us in)
+         * and is dead after this jump, so use it as the branch cell — do NOT touch
+         * INT_Z, which the fault entry keeps live across its own instructions.
+         */
+        .word   ZERO, .Lhazard_scratch, INT_SAVED_PC | INDIRECT
 
 .Lphase0a_start:
         /*
@@ -3065,6 +3091,12 @@ __subleq_syscall:
         .word   subleq_irq_entry - 1   /* Lower bound (exclusive) for range check */
 .Lconst_entry_size:
         .word   subleq_irq_entry_end - subleq_irq_entry  /* Handler size */
+#ifdef CONFIG_MMU
+.Lconst_fault_start_m1:
+        .word   subleq_fault_entry - 1                   /* Lower bound (excl) for fault-entry range */
+.Lconst_fault_size:
+        .word   subleq_fault_entry_end - subleq_fault_entry  /* Fault-entry handler size */
+#endif
 
 /* Miscellaneous constants */
 .Lconst_1:
