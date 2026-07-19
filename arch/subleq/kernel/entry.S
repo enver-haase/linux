@@ -184,13 +184,23 @@ subleq_irq_entry:
         .word   INT_Z2, INT_Z2, .+4              /* INT_Z2 = 0 */
         .word   SAVE_SP, INT_Z2, .+4             /* INT_Z2 = SP */
         .word   subleq_kernel_sp, INT_Z2, .+4    /* INT_Z2 = SP - kernel_sp */
-        /* If SP - kernel_sp > 0 (SP > kernel_sp), it's user mode */
-        /* subleq ZERO, INT_Z2, next: INT_Z2 -= 0, jump if INT_Z2 <= 0 */
-        /* We want to jump to user mode if INT_Z2 > 0 (SP > kernel_sp) */
-        /* Invert: fall through if INT_Z2 > 0, otherwise continue to check 2 */
-        .word   ZERO, INT_Z2, .Lcheck_kstack_base  /* if SP <= kernel_sp, check base */
-        /* SP > kernel_sp: definitely user mode */
+        /*
+         * Upper bound is kernel_sp + 1268, NOT kernel_sp: the syscall/fault entry
+         * builds the interrupted task's user pt_regs at kernel_sp + 1024, and its
+         * entry ASM and early C frame (subleq_trap/do_page_fault prologue) run with
+         * SP in (kernel_sp, kernel_sp + 1268] — ABOVE kernel_sp. If a timer there is
+         * mis-classified as a user-mode interrupt, .Lswitch_to_kernel rebuilds a
+         * nested pt_regs at kernel_sp + 1024, overwriting that user pt_regs with
+         * kernel-context registers; the syscall then restores a KERNEL sp into the
+         * user task (the ~0x6067xxx wild-SP crash). Treat SP <= kernel_sp + 1268 as
+         * kernel mode. (A user SP can never land in this tiny kernel-local window.)
+         */
+        .word   .Lconst_pos1268, INT_Z2, .+4     /* INT_Z2 = SP - kernel_sp - 1268 */
+        .word   ZERO, INT_Z2, .Lkstack_upper_ok  /* if SP <= kernel_sp + 1268, in range */
+        /* SP > kernel_sp + 1268: genuine user mode */
         .word   INT_Z, INT_Z, .Lswitch_to_kernel
+.Lkstack_upper_ok:
+        .word   .Lconst_neg1268, INT_Z2, .+4     /* INT_Z2 += 1268 = SP - kernel_sp (restore for check 2) */
 
 .Lcheck_kstack_base:
         /*
