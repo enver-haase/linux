@@ -27,7 +27,7 @@ config SUBLEQ
 	  This port runs on the Subleq virtual machine.
 
 config MMU
-	def_bool n
+	def_bool y
 
 config NOMMU
 	def_bool !MMU
