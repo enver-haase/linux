@@ -1819,6 +1819,94 @@ ret_from_fork:
         .word   REG_RA | INDIRECT, REG_R31, .+4
 
         /*
+         * --- Restore T-registers (T0-T14) and Z from pt_regs ---
+         *
+         * CRITICAL under CONFIG_MMU: the ESI register file (page 1) is a single
+         * physical page shared between the kernel and the current user task. If we
+         * return to user without writing these cells, a freshly exec'd task inherits
+         * the KERNEL's leftover T-regs/Z left in page 1 -- garbage that breaks
+         * write-before-read assumptions (wild/near-NULL pointers) AND leaks kernel
+         * state to userspace. start_thread() zeroes t0-t15/z in pt_regs, so exec'd
+         * tasks get a clean slate; fork children get the parent's saved values.
+         *
+         * T15 is intentionally NOT restored here: the code below loads it with the
+         * user PC and uses it as the indirect jump target (a T-reg is required
+         * because it survives a context switch mid-return, unlike the SW_* globals).
+         * PC is the task's own entry address, not kernel state, so this is benign.
+         *
+         * pt_regs offsets: T0=160 .. T14=216, Z=224. RA is the running pointer.
+         */
+        .word   SW_Z, SW_Z, .+4
+        .word   REG_R20, SW_Z, .+4               /* SW_Z = -R20 */
+        .word   REG_RA, REG_RA, .+4              /* RA = 0 */
+        .word   SW_Z, REG_RA, .+4                /* RA = R20 */
+        .word   .Lconst_neg160, REG_RA, .+4      /* RA = R20 + 160 = &pt_regs->t0 */
+
+        /* T0 (offset 160) */
+        .word   REG_T0, REG_T0, .+4
+        .word   REG_RA | INDIRECT, REG_T0, .+4
+        /* T1 (164) */
+        .word   .Lconst_neg4, REG_RA, .+4
+        .word   REG_T1, REG_T1, .+4
+        .word   REG_RA | INDIRECT, REG_T1, .+4
+        /* T2 (168) */
+        .word   .Lconst_neg4, REG_RA, .+4
+        .word   REG_T2, REG_T2, .+4
+        .word   REG_RA | INDIRECT, REG_T2, .+4
+        /* T3 (172) */
+        .word   .Lconst_neg4, REG_RA, .+4
+        .word   REG_T3, REG_T3, .+4
+        .word   REG_RA | INDIRECT, REG_T3, .+4
+        /* T4 (176) */
+        .word   .Lconst_neg4, REG_RA, .+4
+        .word   REG_T4, REG_T4, .+4
+        .word   REG_RA | INDIRECT, REG_T4, .+4
+        /* T5 (180) */
+        .word   .Lconst_neg4, REG_RA, .+4
+        .word   REG_T5, REG_T5, .+4
+        .word   REG_RA | INDIRECT, REG_T5, .+4
+        /* T6 (184) */
+        .word   .Lconst_neg4, REG_RA, .+4
+        .word   REG_T6, REG_T6, .+4
+        .word   REG_RA | INDIRECT, REG_T6, .+4
+        /* T7 (188) */
+        .word   .Lconst_neg4, REG_RA, .+4
+        .word   REG_T7, REG_T7, .+4
+        .word   REG_RA | INDIRECT, REG_T7, .+4
+        /* T8 (192) */
+        .word   .Lconst_neg4, REG_RA, .+4
+        .word   REG_T8, REG_T8, .+4
+        .word   REG_RA | INDIRECT, REG_T8, .+4
+        /* T9 (196) */
+        .word   .Lconst_neg4, REG_RA, .+4
+        .word   REG_T9, REG_T9, .+4
+        .word   REG_RA | INDIRECT, REG_T9, .+4
+        /* T10 (200) */
+        .word   .Lconst_neg4, REG_RA, .+4
+        .word   REG_T10, REG_T10, .+4
+        .word   REG_RA | INDIRECT, REG_T10, .+4
+        /* T11 (204) */
+        .word   .Lconst_neg4, REG_RA, .+4
+        .word   REG_T11, REG_T11, .+4
+        .word   REG_RA | INDIRECT, REG_T11, .+4
+        /* T12 (208) */
+        .word   .Lconst_neg4, REG_RA, .+4
+        .word   REG_T12, REG_T12, .+4
+        .word   REG_RA | INDIRECT, REG_T12, .+4
+        /* T13 (212) */
+        .word   .Lconst_neg4, REG_RA, .+4
+        .word   REG_T13, REG_T13, .+4
+        .word   REG_RA | INDIRECT, REG_T13, .+4
+        /* T14 (216) */
+        .word   .Lconst_neg4, REG_RA, .+4
+        .word   REG_T14, REG_T14, .+4
+        .word   REG_RA | INDIRECT, REG_T14, .+4
+        /* Z (offset 224): skip T15 (220), advance +8 */
+        .word   .Lconst_neg8, REG_RA, .+4
+        .word   REG_Z, REG_Z, .+4
+        .word   REG_RA | INDIRECT, REG_Z, .+4
+
+        /*
          * Step 1: Calculate &pt_regs->pc (R20 + 128) and load into REG_T15
          *
          * CRITICAL: We use REG_T15 (a T-register) instead of SW_Z2 (a global)
@@ -1948,6 +2036,70 @@ jump_to_userspace:
         .word   SW_Z, REG_SP, .+4                /* SP = R22 */
         /* CR_SAVED_PC = R21 (user entry, word index) */
         .word   REG_R21, CR_SAVED_PC, .+4
+        /*
+         * Clear ALL user-visible registers before entering user mode.
+         *
+         * CRITICAL under CONFIG_MMU: the ESI register file (page 1) is a single
+         * physical page shared between the kernel and the current user task. This
+         * exec transition (kernel_thread_helper -> here) does NOT go through the
+         * pt_regs restore in ret_from_fork, so without clearing them the freshly
+         * exec'd task would inherit the KERNEL's leftover R-/T-regs, Z, RA and FP.
+         * That garbage breaks compiled code's write-before-read assumptions (wild /
+         * near-NULL pointers) AND leaks kernel state to userspace. exec semantics
+         * require a zeroed register set regardless.
+         *
+         * SP (user stack) and CR_SAVED_PC (user entry) are already set above; the
+         * constant cells ZERO/ONE/MINUS_ONE are preserved. subleq(X,X,.) => X = 0.
+         * R21/R22 (our inputs) are consumed by now and cleared here too.
+         */
+        .word   REG_R3,  REG_R3,  .+4
+        .word   REG_R4,  REG_R4,  .+4
+        .word   REG_R5,  REG_R5,  .+4
+        .word   REG_R6,  REG_R6,  .+4
+        .word   REG_R7,  REG_R7,  .+4
+        .word   REG_R8,  REG_R8,  .+4
+        .word   REG_R9,  REG_R9,  .+4
+        .word   REG_R10, REG_R10, .+4
+        .word   REG_R11, REG_R11, .+4
+        .word   REG_R12, REG_R12, .+4
+        .word   REG_R13, REG_R13, .+4
+        .word   REG_R14, REG_R14, .+4
+        .word   REG_R15, REG_R15, .+4
+        .word   REG_R16, REG_R16, .+4
+        .word   REG_R17, REG_R17, .+4
+        .word   REG_R18, REG_R18, .+4
+        .word   REG_R19, REG_R19, .+4
+        .word   REG_R20, REG_R20, .+4
+        .word   REG_R21, REG_R21, .+4
+        .word   REG_R22, REG_R22, .+4
+        .word   REG_R23, REG_R23, .+4
+        .word   REG_R24, REG_R24, .+4
+        .word   REG_R25, REG_R25, .+4
+        .word   REG_R26, REG_R26, .+4
+        .word   REG_R27, REG_R27, .+4
+        .word   REG_R28, REG_R28, .+4
+        .word   REG_R29, REG_R29, .+4
+        .word   REG_R30, REG_R30, .+4
+        .word   REG_R31, REG_R31, .+4
+        .word   REG_RA,  REG_RA,  .+4
+        .word   REG_FP,  REG_FP,  .+4
+        .word   REG_T0,  REG_T0,  .+4
+        .word   REG_T1,  REG_T1,  .+4
+        .word   REG_T2,  REG_T2,  .+4
+        .word   REG_T3,  REG_T3,  .+4
+        .word   REG_T4,  REG_T4,  .+4
+        .word   REG_T5,  REG_T5,  .+4
+        .word   REG_T6,  REG_T6,  .+4
+        .word   REG_T7,  REG_T7,  .+4
+        .word   REG_T8,  REG_T8,  .+4
+        .word   REG_T9,  REG_T9,  .+4
+        .word   REG_T10, REG_T10, .+4
+        .word   REG_T11, REG_T11, .+4
+        .word   REG_T12, REG_T12, .+4
+        .word   REG_T13, REG_T13, .+4
+        .word   REG_T14, REG_T14, .+4
+        .word   REG_T15, REG_T15, .+4
+        .word   REG_Z,   REG_Z,   .+4
         /* return-from-trap: switch to MODE_USER and jump to CR_SAVED_PC */
         .word   ZERO, CR_RTE, .+4
 .Ljtu_mmu_hang:                                  /* unreached (now in user mode) */

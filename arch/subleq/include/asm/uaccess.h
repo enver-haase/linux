@@ -58,32 +58,42 @@ static inline __must_check unsigned long clear_user(void __user *to, unsigned lo
 	return subleq_clear_user(to, n);
 }
 
+/*
+ * NB: these macros must evaluate `ptr` EXACTLY ONCE. Generic kernel callers pass
+ * side-effecting expressions (e.g. create_elf_tables()'s `put_user(v, sp++)`), so a
+ * naive macro that mentions (ptr) more than once increments sp multiple times and
+ * scrambles the write positions (8-byte stride, value at +4). Latch `ptr` into a
+ * local first, then use only that local.
+ */
 #define __get_user(x, ptr)						\
 	({								\
+		__typeof__((ptr)) __gu_p = (ptr);			\
 		__typeof__(*(ptr)) __gu_val;				\
 		unsigned long __gu_err =				\
 			subleq_copy_from_user((void *)&__gu_val,	\
-					      (const void __user *)(ptr), \
-					      sizeof(*(ptr)));		\
+					      (const void __user *)__gu_p, \
+					      sizeof(*__gu_p));		\
 		(x) = __gu_val;						\
 		__gu_err ? -EFAULT : 0;					\
 	})
 
 #define __put_user(x, ptr)						\
 	({								\
+		__typeof__((ptr)) __pu_p = (ptr);			\
 		__typeof__(*(ptr)) __pu_val = (x);			\
 		unsigned long __pu_err =				\
-			subleq_copy_to_user((void __user *)(ptr),	\
+			subleq_copy_to_user((void __user *)__pu_p,	\
 					    (const void *)&__pu_val,	\
-					    sizeof(*(ptr)));		\
+					    sizeof(*__pu_p));		\
 		__pu_err ? -EFAULT : 0;					\
 	})
 
 #define get_user(x, ptr)						\
 	({								\
+		__typeof__((ptr)) __g_p = (ptr);			\
 		int __g_ret;						\
-		if (access_ok((ptr), sizeof(*(ptr)))) {			\
-			__g_ret = __get_user((x), (ptr));		\
+		if (access_ok(__g_p, sizeof(*__g_p))) {			\
+			__g_ret = __get_user((x), __g_p);		\
 		} else {						\
 			(x) = (__typeof__(*(ptr)))0;			\
 			__g_ret = -EFAULT;				\
@@ -93,8 +103,9 @@ static inline __must_check unsigned long clear_user(void __user *to, unsigned lo
 
 #define put_user(x, ptr)						\
 	({								\
-		access_ok((ptr), sizeof(*(ptr))) ?			\
-			__put_user((x), (ptr)) : -EFAULT;		\
+		__typeof__((ptr)) __p_p = (ptr);			\
+		access_ok(__p_p, sizeof(*__p_p)) ?			\
+			__put_user((x), __p_p) : -EFAULT;		\
 	})
 
 /* Own string helpers (so lib/strncpy_from_user.c etc. are not built). */
