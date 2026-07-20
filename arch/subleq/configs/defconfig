@@ -20,8 +20,10 @@ CONFIG_BUG=y
 # CONFIG_MODULES is not set
 # CONFIG_BLOCK is not set
 
-# Preemption - full preemption for debugging
-CONFIG_PREEMPT=y
+# Preemption - NONE. In-kernel preemption on this shared-ESI-register-file arch is
+# fragile (a timer interrupting a syscall's C handler exercises the hand-written
+# entry/exit save-restore paths); not needed for the DOOM/BusyBox workload.
+CONFIG_PREEMPT_NONE=y
 
 # Enable POSIX timers (experiment)
 CONFIG_POSIX_TIMERS=y

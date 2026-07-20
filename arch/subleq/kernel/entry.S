@@ -3131,6 +3131,8 @@ __subleq_syscall:
         .word   -38
 .Lconst_neg1024:
         .word   -1024
+.Lconst_neg1144:
+        .word   -1144           /* kernel_sp + 1144 = &pt_regs->sp (pt_regs at +1024, sp at off 120) */
 .Lconst_neg1268:
         .word   -1268           /* kernel_sp + 1268 = pt_regs after pushes and allocation */
 .Lconst_pos1268:
@@ -3495,9 +3497,23 @@ subleq_fault_entry:
         .word   REG_SP | INDIRECT, SYSCALL_JMPTGT, .+4
         .word   .Lconst_neg4, REG_SP, .+4
 
-        /* --- restore user SP (SAVE_SP = -user_sp) --- */
-        .word   REG_SP, REG_SP, .+4
-        .word   SAVE_SP, REG_SP, .+4                 /* SP = user_sp              */
+        /* --- restore user SP from pt_regs->sp, NOT the global SAVE_SP. --- *
+         * SAVE_SP is a shared global also used by subleq_irq_entry (Phase 0c:
+         * SAVE_SP = -SP). A timer IRQ firing in this syscall's C handler (e.g.
+         * deep in __subleq_memmove, whose PC is outside the hazard-guarded entry
+         * range, so it is NOT skipped) runs subleq_irq_entry and overwrites
+         * SAVE_SP with its own interrupted kernel-stack SP. Restoring the user SP
+         * from SAVE_SP therefore leaked a kernel SP into the user task (the
+         * ~0x6067xxx wild-SP crash). pt_regs is per-task on the kernel stack at
+         * kernel_sp+1024 (->sp at +1144, stored negated) and is untouched by
+         * those nested IRQs, so read it instead. */
+        .word   INT_Z, INT_Z, .+4                    /* INT_Z = 0                 */
+        .word   subleq_kernel_sp, INT_Z, .+4         /* INT_Z = -kernel_sp        */
+        .word   INT_Z2, INT_Z2, .+4                  /* INT_Z2 = 0                */
+        .word   INT_Z, INT_Z2, .+4                   /* INT_Z2 = kernel_sp        */
+        .word   .Lconst_neg1144, INT_Z2, .+4         /* INT_Z2 = &pt_regs->sp     */
+        .word   REG_SP, REG_SP, .+4                  /* SP = 0                    */
+        .word   INT_Z2 | INDIRECT, REG_SP, .+4       /* SP = -(-user_sp) = user_sp*/
 
         /* --- restore CR_SAVED_PC (word index) and return-from-trap --- *
          * CR_SAVED_PC := subleq_fault_saved_pc; then any write to CR_RTE re-enters user

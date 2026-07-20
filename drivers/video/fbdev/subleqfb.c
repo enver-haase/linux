@@ -255,15 +255,31 @@ static void subleqfb_imageblit(struct fb_info *info, const struct fb_image *imag
 }
 
 /*
- * NOMMU mmap support.
+ * mmap support.
  *
- * On NOMMU, get_fb_unmapped_area() (enabled by CONFIG_FB_PROVIDE_GET_FB_UNMAPPED_AREA)
- * tells the NOMMU mmap code to use screen_base directly.  The fb_mmap callback
- * just needs to succeed so the fb core doesn't reject the mmap call.
+ * NOMMU: get_fb_unmapped_area() (CONFIG_FB_PROVIDE_GET_FB_UNMAPPED_AREA) points the
+ * NOMMU mmap code at screen_base directly; the callback just needs to succeed.
+ *
+ * MMU: the framebuffer is a fixed physical region (SUBLEQFB_FB_ADDR); map its pages
+ * into the user vma with remap_pfn_range so userspace (e.g. fbdoom) can write pixels
+ * directly. The VM's page-table walk resolves the resulting PTEs to the fb words.
  */
 static int subleqfb_mmap(struct fb_info *info, struct vm_area_struct *vma)
 {
+#ifdef CONFIG_MMU
+	unsigned long size = vma->vm_end - vma->vm_start;
+	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
+
+	if (offset >= SUBLEQFB_FB_SIZE || size > SUBLEQFB_FB_SIZE - offset)
+		return -EINVAL;
+
+	vm_flags_set(vma, VM_IO);
+	return remap_pfn_range(vma, vma->vm_start,
+			       (SUBLEQFB_FB_ADDR + offset) >> PAGE_SHIFT,
+			       size, vma->vm_page_prot);
+#else
 	return 0;
+#endif
 }
 
 static const struct fb_ops subleqfb_ops = {
