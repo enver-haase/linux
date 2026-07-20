@@ -75,10 +75,29 @@ int main(void)
 	/* task->stack offset for kernel stack pointer computation */
 	DEFINE(TASK_STACK, offsetof(struct task_struct, stack));
 	/* Offset from stack page base to get subleq_kernel_sp value:
-	 * kernel_sp = task->stack + THREAD_SIZE - sizeof(pt_regs) - 1024
-	 * This constant = THREAD_SIZE - sizeof(pt_regs) - 1024
+	 * kernel_sp = task->stack + THREAD_SIZE - sizeof(pt_regs) - 1024 - 8
+	 * This constant = THREAD_SIZE - sizeof(pt_regs) - 1024 - 8
+	 *
+	 * The syscall/fault entry (entry.S) resets SP to kernel_sp + 1268 and
+	 * builds the frame downward as [SYSCALL_SCRATCH | SYSCALL_JMPTGT | pt_regs]:
+	 * pt_regs occupies [kernel_sp+1024, kernel_sp+1260) and the two saved
+	 * globals occupy [kernel_sp+1260, kernel_sp+1268) = 8 bytes ABOVE pt_regs.
+	 * The original offset (without -8) placed pt_regs' top exactly at the stack
+	 * top (stack + THREAD_SIZE), so those 8 bytes of saved globals overflowed
+	 * one page past the stack — silently clobbering the neighbouring allocation
+	 * on every trap (deterministically PID1's own sighand->signalfd_wqh, whose
+	 * zeroed list head then crashed __wake_up on the next signal). The -8
+	 * reserves that headroom so the whole 244-byte frame ends at the stack top.
+	 * task_pt_regs (processor.h) is shifted down by the same 8 to match.
 	 */
+#ifdef CONFIG_MMU
+	/* MMU-only: the fault/syscall entry saves 8 bytes of globals above pt_regs
+	 * (see the comment above). NOMMU uses the frameless __subleq_syscall path
+	 * with pt_regs at the stack top, so keep its offset unchanged/byte-identical. */
+	DEFINE(KERNEL_SP_OFFSET, THREAD_SIZE - sizeof(struct pt_regs) - 1024 - 8);
+#else
 	DEFINE(KERNEL_SP_OFFSET, THREAD_SIZE - sizeof(struct pt_regs) - 1024);
+#endif
 	BLANK();
 
 	/*

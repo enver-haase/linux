@@ -47,10 +47,23 @@ struct thread_struct {
 #define cpu_relax() barrier()
 
 /*
- * Get saved registers from a stopped task
+ * Get saved registers from a stopped task.
+ *
+ * The syscall/fault entry (entry.S) saves 8 bytes of syscall globals
+ * (SYSCALL_SCRATCH + SYSCALL_JMPTGT) ABOVE pt_regs on the kernel stack, so
+ * pt_regs must sit 8 bytes below the stack top to leave room for them (see
+ * KERNEL_SP_OFFSET in asm-offsets.c). Without the "- 8" the asm frame's top
+ * two words overflowed into the next page. Keep this in lockstep with
+ * KERNEL_SP_OFFSET: asm pt_regs = kernel_sp + 1024 = stack + THREAD_SIZE - 8
+ * - sizeof(pt_regs), which is exactly what this macro computes.
  */
+#ifdef CONFIG_MMU
+#define task_pt_regs(task) \
+	((struct pt_regs *)(task_stack_page(task) + THREAD_SIZE - 8) - 1)
+#else
 #define task_pt_regs(task) \
 	((struct pt_regs *)(task_stack_page(task) + THREAD_SIZE) - 1)
+#endif
 
 /*
  * Saved instruction pointer and stack pointer.
