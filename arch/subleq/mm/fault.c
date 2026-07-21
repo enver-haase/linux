@@ -196,23 +196,31 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 	 * clean, diagnosable failure. If a handler is installed, setup_rt_frame()
 	 * rewrites pt_regs->pc to the handler entry.
 	 */
-	if (need_resched())
-		schedule();
-	if (test_thread_flag(TIF_SIGPENDING) ||
-	    test_thread_flag(TIF_NOTIFY_SIGNAL))
-		do_signal(regs);
-	if (test_thread_flag(TIF_NOTIFY_RESUME))
-		resume_user_mode_work(regs);
+	{
+		bool handled_sig = false;
 
-	/*
-	 * Reflect any signal-induced pc change into the RTE target. For a plain
-	 * demand fault pt_regs->pc is unchanged (== the faulting instruction, so
-	 * this equals the value stashed at fault entry — a no-op restart); if
-	 * do_signal() set up a handler, pt_regs->pc now points at it. Either way
-	 * resume at pt_regs->pc (byte address -> word index, like the syscall
-	 * path's ra >> 2).
-	 */
-	subleq_fault_saved_pc = PT_REG_GET(regs, pc) >> 2;
+		if (need_resched())
+			schedule();
+		if (test_thread_flag(TIF_SIGPENDING) ||
+		    test_thread_flag(TIF_NOTIFY_SIGNAL))
+			handled_sig = do_signal(regs);
+		if (test_thread_flag(TIF_NOTIFY_RESUME))
+			resume_user_mode_work(regs);
+
+		/*
+		 * Adopt pt_regs->pc as the RTE resume target ONLY when do_signal()
+		 * actually set up a handler (setup_rt_frame() just rewrote pt_regs->pc
+		 * to the handler entry). For a plain demand fault, DO NOT touch
+		 * subleq_fault_saved_pc: leave the value stashed at fault entry (the
+		 * faulting instruction, for restart). pt_regs->pc must NOT be trusted
+		 * here for the restart case — it can be stale/corrupt for a demand
+		 * fault, and blindly resuming from it sends the task to a wild pc.
+		 * (For an unhandled fatal SIGSEGV, do_signal() -> get_signal() takes
+		 * the default path -> do_exit/panic and never returns here.)
+		 */
+		if (handled_sig)
+			subleq_fault_saved_pc = PT_REG_GET(regs, pc) >> 2;
+	}
 }
 
 /*
