@@ -15,6 +15,8 @@ obj-y += syscall_entry.o
 obj-y += sys_subleq.o
 obj-y += tty.o
 obj-y += keyboard.o
+# Sound-card MMIO helpers (raw .word); the card exists on both NOMMU and MMU.
+obj-$(CONFIG_SUBLEQ_SOUND) += subleq-sound.o
 # NOMMU uses the bespoke load-time-relocated ELF loader; MMU uses generic binfmt_elf.
 obj-$(CONFIG_NOMMU) += binfmt_elf_subleq.o
 obj-$(CONFIG_NOMMU) += elf_process_relr_section.o

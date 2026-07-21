@@ -423,4 +423,16 @@ config ADI
 	  and SSM (Silicon Secured Memory).  Intended consumers of this
 	  driver include crash and makedumpfile.
 
+config SUBLEQ_SOUND
+	bool "Subleq VM sound card (OPL3 + PCM)"
+	depends on SUBLEQ
+	default y
+	help
+	  Driver for the lunatix Subleq VM's host-side sound card. Exposes an
+	  OSS-style /dev/dsp PCM sink and a /dev/opl OPL3 register port. The VM
+	  runs the OPL3 emulator and PCM mixing on the host; the guest only
+	  produces register writes and PCM frames. Needed for sound in fbdoom.
+
+	  If unsure, say Y.
+
 endmenu

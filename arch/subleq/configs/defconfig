@@ -175,6 +175,9 @@ CONFIG_INPUT_KEYBOARD=y
 # /dev/mem (no benefit, security surface)
 # CONFIG_DEVMEM is not set
 
+# Sound card (host-side OPL3 + PCM): /dev/dsp + /dev/opl for fbdoom
+CONFIG_SUBLEQ_SOUND=y
+
 # CPU mitigations (Subleq VM has no speculative execution)
 # CONFIG_CPU_MITIGATIONS is not set
 
