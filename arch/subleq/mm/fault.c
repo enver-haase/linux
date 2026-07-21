@@ -26,6 +26,7 @@
 #include <linux/kernel.h>
 #include <linux/vmalloc.h>
 #include <linux/linkage.h>
+#include <linux/resume_user_mode.h>
 #include <asm/ptrace.h>
 #include <asm/pgalloc.h>
 #include <asm/traps.h>
@@ -163,6 +164,7 @@ no_context:
 extern asmlinkage long __subleq_syscall_c(long nr, long a1, long a2, long a3,
 					  long a4, long a5, long a6);
 extern unsigned long subleq_fault_saved_pc;	/* kernel/entry.S */
+extern bool do_signal(struct pt_regs *regs);	/* kernel/signal.c */
 
 asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 			    unsigned long cause, unsigned long access)
@@ -177,6 +179,40 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 		return;
 	}
 	do_page_fault(regs, addr, cause, access);
+
+	/*
+	 * Return-to-user work for the FAULT path.
+	 *
+	 * Previously omitted entirely: a fault that raised a signal (e.g.
+	 * force_sig_fault(SIGSEGV) from bad_area on an illegal access) would RTE
+	 * straight back to the faulting instruction and re-fault forever, because
+	 * the pending signal was never delivered — an unrecoverable user fault
+	 * hung the whole machine instead of killing the task. Mirror the syscall
+	 * return path (syscall_entry.c __subleq_syscall_c out:) so pending signals
+	 * and task_work run before we RTE.
+	 *
+	 * For an unhandled fatal SIGSEGV, get_signal() takes the default path
+	 * (do_exit / panic("kill init") for PID1) and never returns here — a
+	 * clean, diagnosable failure. If a handler is installed, setup_rt_frame()
+	 * rewrites pt_regs->pc to the handler entry.
+	 */
+	if (need_resched())
+		schedule();
+	if (test_thread_flag(TIF_SIGPENDING) ||
+	    test_thread_flag(TIF_NOTIFY_SIGNAL))
+		do_signal(regs);
+	if (test_thread_flag(TIF_NOTIFY_RESUME))
+		resume_user_mode_work(regs);
+
+	/*
+	 * Reflect any signal-induced pc change into the RTE target. For a plain
+	 * demand fault pt_regs->pc is unchanged (== the faulting instruction, so
+	 * this equals the value stashed at fault entry — a no-op restart); if
+	 * do_signal() set up a handler, pt_regs->pc now points at it. Either way
+	 * resume at pt_regs->pc (byte address -> word index, like the syscall
+	 * path's ra >> 2).
+	 */
+	subleq_fault_saved_pc = PT_REG_GET(regs, pc) >> 2;
 }
 
 /*
