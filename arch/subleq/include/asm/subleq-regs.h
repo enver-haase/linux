@@ -102,17 +102,22 @@
 .set CR_SYSGATE,   -104   /* word -26 : user syscall-gate vaddr (word idx); 0=off  */
 
 /*
- * Sound-card MMIO registers (lunatix VM). Named by an operand whose effective WORD
- * index is negative (src/vm.c is_audio_reg, words -27..-31); as .word operands they
- * are BYTE addresses = word_index * 4. Supervisor-only, WRITE-only (the VM takes the
- * instruction's SOURCE operand as the payload and ignores the device dest):
+ * Sound-card MMIO registers (lunatix VM) — RELOCATED (toolchain-cleanup §8 Phase 2) from
+ * the old negative sentinels (words -27..-31) to POSITIVE zero-page words 67-71 (bytes
+ * 268-284): the free gap just ABOVE the clock (words 64-66) and below the register file /
+ * kernel text. This makes the soundcard an OPTIONAL device — a VM WITHOUT it (stock
+ * CableVM, no bounds checking) treats a write as a harmless in-array store to a reserved
+ * cell nobody reads, so ONE cable-NOMMU image runs silently there and with sound on lunavm.
+ * As .word operands these are BYTE addresses = word_index * 4. Supervisor-only, WRITE-only
+ * (the VM takes the instruction's SOURCE operand as the payload and ignores the device dest):
  *   write reg: .word <src>, <MMIO_*>, <next>   -> device_reg := mem[src]
- * See arch/subleq/kernel/subleq-sound.S and docs/sound-handoff-linux.md.
+ * Chosen to clear the register file (NOMMU words 3-55), kernel scratch (56-63) and clock
+ * (64-66). See arch/subleq/kernel/subleq-sound.S and docs/sound-handoff-linux.md.
  */
-.set MMIO_OPL,        -108  /* word -27 : packed (reg<<8)|val -> OPL3 chip           */
-.set MMIO_PCM_BASE,   -112  /* word -28 : PCM ring physical WORD index (0 = off)     */
-.set MMIO_PCM_FRAMES, -116  /* word -29 : PCM ring capacity in stereo frames         */
-.set MMIO_PCM_WRITE,  -120  /* word -30 : PCM producer counter (frames enqueued)     */
-.set MMIO_PCM_RATE,   -124  /* word -31 : PCM sample rate in Hz                      */
+.set MMIO_OPL,        268  /* word 67 : packed (reg<<8)|val -> OPL3 chip            */
+.set MMIO_PCM_BASE,   272  /* word 68 : PCM ring physical WORD index (0 = off)      */
+.set MMIO_PCM_FRAMES, 276  /* word 69 : PCM ring capacity in stereo frames          */
+.set MMIO_PCM_WRITE,  280  /* word 70 : PCM producer counter (frames enqueued)      */
+.set MMIO_PCM_RATE,   284  /* word 71 : PCM sample rate in Hz                       */
 
 #endif /* _ASM_SUBLEQ_REGS_H */
