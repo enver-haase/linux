@@ -435,4 +435,17 @@ config SUBLEQ_SOUND
 
 	  If unsure, say Y.
 
+config SUBLEQ_WAD
+	bool "Subleq VM host-file device (/dev/wad)"
+	depends on SUBLEQ
+	default y
+	help
+	  Driver for the lunatix/Vaadoom Subleq VM host-file channel. Exposes a
+	  file held by the VM host - an IWAD fetched by the browser - as a
+	  read-only /dev/wad, plus /dev/wadname carrying the name DOOM should see
+	  it under. The host performs the copies, so the guest can play a
+	  multi-megabyte WAD it never had to read byte by byte itself.
+
+	  If unsure, say Y.
+
 endmenu

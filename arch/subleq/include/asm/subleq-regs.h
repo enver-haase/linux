@@ -120,4 +120,23 @@
 .set MMIO_PCM_WRITE,  280  /* word 70 : PCM producer counter (frames enqueued)      */
 .set MMIO_PCM_RATE,   284  /* word 71 : PCM sample rate in Hz                       */
 
+/*
+ * Host-file (WAD) MMIO registers (lunatix / Vaadoom VM) - positive zero-page words
+ * 72-77 (bytes 288-308), directly above the sound card and still far below the kernel
+ * text at 0x1000. The VM holds a file supplied by its host (in Vaadoom the browser
+ * fetches an IWAD) and copies slices of it into guest RAM on demand, so the SUBLEQ CPU
+ * never moves megabytes itself. Optional in exactly the same way as the sound card: a
+ * VM without the device leaves these cells at zero, HF_SIZE reads back 0, and the guest
+ * falls back to the WAD in its own initramfs.
+ * Write registers take the payload from the instruction's SOURCE operand; the two read
+ * registers are refreshed by the VM when an instruction sources them (like the clock at
+ * word 64). See arch/subleq/kernel/subleq-wad.S.
+ */
+.set MMIO_HF_SEL,     288  /* word 72 : W: stream select (0 = file bytes, 1 = name)  */
+.set MMIO_HF_DEST,    292  /* word 73 : W: destination physical WORD index           */
+.set MMIO_HF_OFF,     296  /* word 74 : W: byte offset within the stream             */
+.set MMIO_HF_LEN,     300  /* word 75 : W: byte count - writing it runs the transfer */
+.set MMIO_HF_SIZE,    304  /* word 76 : R: stream size in bytes (0 = no host file)   */
+.set MMIO_HF_DONE,    308  /* word 77 : R: bytes copied by the last transfer, -1 err */
+
 #endif /* _ASM_SUBLEQ_REGS_H */

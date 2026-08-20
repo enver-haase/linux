@@ -175,6 +175,7 @@ CONFIG_INPUT_KEYBOARD=y
 
 # Sound card (host-side OPL3 + PCM): /dev/dsp + /dev/opl for fbdoom
 CONFIG_SUBLEQ_SOUND=y
+CONFIG_SUBLEQ_WAD=y
 
 # CPU mitigations (Subleq VM has no speculative execution)
 # CONFIG_CPU_MITIGATIONS is not set

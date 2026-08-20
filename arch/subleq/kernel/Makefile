@@ -21,6 +21,7 @@ obj-$(CONFIG_NOMMU) += elf_process_relr_section.o
 obj-$(CONFIG_MMU) += subleq-cr.o
 # Sound-card MMIO helpers (raw .word); the card exists on both NOMMU and MMU.
 obj-$(CONFIG_SUBLEQ_SOUND) += subleq-sound.o
+obj-$(CONFIG_SUBLEQ_WAD) += subleq-wad.o
 obj-$(CONFIG_FRAMEBUFFER_CONSOLE) += fbcon.o bitblit.o direct_putcs_asm.o
 
 
