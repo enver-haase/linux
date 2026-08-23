@@ -297,6 +297,14 @@ void subleq_map_page0(struct mm_struct *mm)
 
 	mmap_write_lock(mm);
 
+	/* Only once per mm: start_thread() can run more than once against the same address space,
+	 * and a second install fails with ENOMEM because the range is already taken -- a warning
+	 * about a mapping that is present is worse than no warning at all. */
+	if (find_vma_intersection(mm, addr, addr + PAGE_SIZE)) {
+		mmap_write_unlock(mm);
+		return;
+	}
+
 	vma = _install_special_mapping(mm, addr, PAGE_SIZE,
 				       VM_READ | VM_WRITE | VM_SHARED | VM_PFNMAP | VM_IO |
 				       VM_DONTEXPAND | VM_DONTDUMP,
