@@ -118,6 +118,13 @@ bad_area:
 	mmap_read_unlock(mm);
 bad_area_nosem:
 	if (user_mode(regs)) {
+		/* Say where it died. Other architectures print this and it is how a userspace
+		 * crash is diagnosed at all: without it a task that faults at its first
+		 * instruction is indistinguishable from one that never started. */
+		pr_info("%s[%d]: segfault at %lx pc %lx sp %lx access %lu cause %lu\n",
+			current->comm, task_pid_nr(current), addr,
+			(unsigned long)PT_REG_GET(regs, pc),
+			(unsigned long)PT_REG_GET(regs, sp), access, cause);
 		force_sig_fault(SIGSEGV, code, (void __user *)addr);
 		return;
 	}
