@@ -304,7 +304,7 @@ subleq_irq_entry:
          *   sp:          offset 120
          *   ra:          offset 124
          *   pc:          offset 128
-         *   orig_r20:    offset 132 (not needed for interrupts)
+         *   rte_pc:      offset 132 (RTE target; interrupts return via m[1])
          *   syscall_nr:  offset 136 (set to -1 for interrupts)
          *   orig_r21:    offset 140 (not needed for interrupts)
          *   orig_a1-a4:  offsets 144-156 (not needed for interrupts)
@@ -514,7 +514,7 @@ subleq_irq_entry:
         .word   INT_Z2 | INDIRECT, INT_Z2 | INDIRECT, .+4
         .word   INT_SAVED_PC, INT_Z2 | INDIRECT, .+4
 
-        /* Skip orig_r20 (offset 132) - not used for interrupts */
+        /* Skip rte_pc (offset 132) - interrupts return via m[1], not CR_RTE */
 
         /* Store syscall_nr = -1 (offset 136) to mark as NOT a syscall
          * For negated storage, we store -(-1) = +1 so that PT_REG_GET reads -1 */
@@ -3131,6 +3131,8 @@ __subleq_syscall:
         .word   -38
 .Lconst_neg1024:
         .word   -1024
+.Lconst_neg1156:
+        .word   -1156           /* &pt_regs->rte_pc = kernel_sp + 1024 + 132 */
 .Lconst_neg1144:
         .word   -1144           /* kernel_sp + 1144 = &pt_regs->sp (pt_regs at +1024, sp at off 120) */
 .Lconst_neg1268:
@@ -3362,7 +3364,8 @@ subleq_fault_entry:
         FAULT_STORE REG_RA          /* ra (off 124) */
         FAULT_STORE INT_SAVED_PC    /* pc (off 128) = bytepc computed above */
 
-        /* syscall_nr (off 136) = -1 (store +1 so PT_REG_GET reads -1); skip orig_r20 */
+        /* syscall_nr (off 136) = -1 (store +1 so PT_REG_GET reads -1); skip rte_pc,
+         * which subleq_trap() fills in from the entry snapshot below */
         .word   .Lconst_neg8, INT_Z2, .+4
         .word   INT_Z2 | INDIRECT, INT_Z2 | INDIRECT, .+4
         .word   .Lconst_neg1, INT_Z2 | INDIRECT, .+4
@@ -3516,9 +3519,26 @@ subleq_fault_entry:
         .word   INT_Z2 | INDIRECT, REG_SP, .+4       /* SP = -(-user_sp) = user_sp*/
 
         /* --- restore CR_SAVED_PC (word index) and return-from-trap --- *
-         * CR_SAVED_PC := subleq_fault_saved_pc; then any write to CR_RTE re-enters user
-         * mode at CR_SAVED_PC (the faulting instruction re-runs). */
-        .word   subleq_fault_saved_pc, CR_SAVED_PC, .+4     /* CR_SAVED_PC := saved_pc (word idx) */
+         * The target comes from pt_regs->rte_pc (offset 132), which is PER TASK: read it
+         * from this task's frame rather than from the global subleq_fault_saved_pc, because
+         * with user preemption subleq_trap() can schedule, and the task that returns here is
+         * not necessarily the one that trapped. subleq_trap() seeds the slot from the entry
+         * snapshot and rewrites it for a syscall return or a signal handler. pt_regs fields
+         * are stored NEGATED, so subtracting gives back the positive word index.
+         * Then any write to CR_RTE re-enters user mode at CR_SAVED_PC. */
+        .word   INT_Z, INT_Z, .+4                    /* INT_Z = 0                 */
+        .word   subleq_kernel_sp, INT_Z, .+4         /* INT_Z = -kernel_sp        */
+        .word   INT_Z2, INT_Z2, .+4                  /* INT_Z2 = 0                */
+        .word   INT_Z, INT_Z2, .+4                   /* INT_Z2 = kernel_sp        */
+        .word   .Lconst_neg1156, INT_Z2, .+4         /* INT_Z2 = &pt_regs->rte_pc */
+        /* CAREFUL: a write whose destination is a control register is an ASSIGNMENT, not a
+         * subtraction (src/cpu.c: is_cr(B) -> cr_write(B, read_src(A))). So the value must
+         * already be positive when it reaches CR_SAVED_PC -- negate the stored field into
+         * INT_Z first. Writing the negated field straight into CR_SAVED_PC resumes every
+         * task at a wild PC, which kills init before its first syscall. */
+        .word   INT_Z, INT_Z, .+4                    /* INT_Z = 0                 */
+        .word   INT_Z2 | INDIRECT, INT_Z, .+4        /* INT_Z = -(-pc) = +pc      */
+        .word   INT_Z, CR_SAVED_PC, .+4              /* CR_SAVED_PC := pc (assign)*/
         .word   ZERO, CR_RTE, .+4                    /* RTE: enter user mode @ CR_SAVED_PC */
 
 .Lfault_return_neg:

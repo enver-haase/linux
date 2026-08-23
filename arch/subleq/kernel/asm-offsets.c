@@ -48,7 +48,7 @@ int main(void)
 	OFFSET(PT_SP, pt_regs, sp);
 	OFFSET(PT_RA, pt_regs, ra);
 	OFFSET(PT_PC, pt_regs, pc);
-	OFFSET(PT_ORIG_R20, pt_regs, orig_r20);
+	OFFSET(PT_RTE_PC, pt_regs, rte_pc);
 	OFFSET(PT_SYSCALL_NR, pt_regs, syscall_nr);
 	OFFSET(PT_ORIG_R21, pt_regs, orig_r21);
 	OFFSET(PT_ORIG_A1, pt_regs, orig_a1);

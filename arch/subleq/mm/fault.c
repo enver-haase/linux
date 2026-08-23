@@ -189,7 +189,7 @@ static void subleq_trap_return_work(struct pt_regs *regs)
 		resume_user_mode_work(regs);
 
 	if (handled_sig)
-		subleq_fault_saved_pc = PT_REG_GET(regs, pc) >> 2;
+		PT_REG_SET(regs, rte_pc, PT_REG_GET(regs, pc) >> 2);
 }
 
 asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
@@ -212,6 +212,13 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 	 * carry the resume PC in pt_regs is the prerequisite for real multitasking here;
 	 * until then this gives one user task a preemptible, tick-driven kernel.
 	 */
+	/*
+	 * Take the entry snapshot of the resume PC into this task's frame immediately, before
+	 * anything below can schedule. From here on the RTE target is per task, so preempting
+	 * one user task while another is mid-trap cannot mix the two up.
+	 */
+	PT_REG_SET(regs, rte_pc, subleq_fault_saved_pc);
+
 	if (cause == SUBLEQ_CAUSE_TIMER) {
 		subleq_do_IRQ(regs);            /* jiffies, timer wheel, softirqs */
 		subleq_trap_return_work(regs);
@@ -224,7 +231,7 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 				   PT_REG_GET(regs, r25), PT_REG_GET(regs, r26),
 				   PT_REG_GET(regs, r27));
 		/* Resume in user mode at the instruction after the gate call. */
-		subleq_fault_saved_pc = PT_REG_GET(regs, ra) >> 2;
+		PT_REG_SET(regs, rte_pc, PT_REG_GET(regs, ra) >> 2);
 		return;
 	}
 	do_page_fault(regs, addr, cause, access);

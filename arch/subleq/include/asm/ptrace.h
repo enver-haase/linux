@@ -58,7 +58,14 @@ struct pt_regs {
 	unsigned long sp;  /* Stack pointer */
 	unsigned long ra;  /* Return address (link register) */
 	unsigned long pc;  /* Program counter */
-	unsigned long orig_r20; /* Unused */
+	unsigned long rte_pc;   /* RTE resume target, a WORD index, PER TASK. The MMU trap
+				 * path used to keep this in the global subleq_fault_saved_pc,
+				 * which is only correct while at most one user task is ever
+				 * inside a trap: preemption schedules another task out of
+				 * subleq_trap(), and its own exit would then RTE to whatever
+				 * PC the last trap stored. Living in pt_regs, it is saved and
+				 * restored with the task like every other register. (Was the
+				 * unused orig_r20; same offset, so no frame layout changes.) */
 	long syscall_nr;        /* Syscall number, -1 if not in syscall */
 	unsigned long orig_r21; /* Original R21 (syscall nr) for restart */
 	unsigned long orig_a1;  /* Original arg1 for syscall restart */
