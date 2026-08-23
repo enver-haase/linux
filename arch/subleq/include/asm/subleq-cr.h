@@ -22,6 +22,9 @@ void subleq_set_sysgate(unsigned long gate_word_index);
 /* Set CR_KPTB: the kernel page-table base (vmalloc window) as a physical WORD index. */
 void subleq_set_kptb(unsigned long kptb_word_index);
 
+/* CR_QUANTUM: user-mode timeslice in microseconds (0 = no user preemption). */
+void subleq_set_quantum(unsigned long usec);
+
 #endif /* CONFIG_MMU */
 #endif /* __ASSEMBLY__ */
 

@@ -28,6 +28,7 @@
 #include <linux/linkage.h>
 #include <linux/resume_user_mode.h>
 #include <asm/ptrace.h>
+#include <asm/irq.h>			/* subleq_do_IRQ(): the timer tick */
 #include <asm/pgalloc.h>
 #include <asm/traps.h>
 
@@ -160,15 +161,63 @@ no_context:
  * overwriting the RTE target subleq_fault_saved_pc (word index).
  */
 #define SUBLEQ_CAUSE_SYSCALL 3	/* must match src/vm.c CAUSE_SYSCALL */
+#define SUBLEQ_CAUSE_TIMER   0	/* must match src/vm.c CAUSE_TIMER   */
 
 extern asmlinkage long __subleq_syscall_c(long nr, long a1, long a2, long a3,
 					  long a4, long a5, long a6);
 extern unsigned long subleq_fault_saved_pc;	/* kernel/entry.S */
 extern bool do_signal(struct pt_regs *regs);	/* kernel/signal.c */
 
+/*
+ * Return-to-user work, shared by every trap cause: run the scheduler if this trap made
+ * something else runnable, then deliver pending signals and task work before we RTE.
+ * Only adopt pt_regs->pc as the RTE target when do_signal() actually installed a handler
+ * (setup_rt_frame() rewrote pt_regs->pc); otherwise leave the target stashed at trap entry,
+ * because pt_regs->pc cannot be trusted for a demand fault and blindly resuming from it
+ * sends the task to a wild pc.
+ */
+static void subleq_trap_return_work(struct pt_regs *regs)
+{
+	bool handled_sig = false;
+
+	if (need_resched())
+		schedule();
+	if (test_thread_flag(TIF_SIGPENDING) ||
+	    test_thread_flag(TIF_NOTIFY_SIGNAL))
+		handled_sig = do_signal(regs);
+	if (test_thread_flag(TIF_NOTIFY_RESUME))
+		resume_user_mode_work(regs);
+
+	if (handled_sig)
+		subleq_fault_saved_pc = PT_REG_GET(regs, pc) >> 2;
+}
+
 asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 			    unsigned long cause, unsigned long access)
 {
+	/*
+	 * Timer preemption of a USER task. The cable timer (m[0]/m[1]) is delivered in
+	 * supervisor mode only, so it can never take the CPU away from a user task that
+	 * neither syscalls nor faults: such a task would own the machine forever. The VM
+	 * therefore counts user-mode steps too and delivers CAUSE_TIMER through this trap
+	 * vector when the quantum expires (src/cpu.c, run(): user_quantum). Run the tick
+	 * exactly as subleq_irq_entry's C half does, then take the normal return-to-user
+	 * path -- which is where a reschedule actually happens. The RTE target is left at
+	 * the stashed PC, so an un-rescheduled task resumes exactly where it was preempted.
+	 *
+	 * LIMITATION (single user task only): this path builds pt_regs at a fixed offset
+	 * from the global subleq_kernel_sp and stashes the resume PC in the global
+	 * subleq_fault_saved_pc, so two user tasks preempted in turn would overwrite each
+	 * other's frame. Making the MMU trap path use the current task's kernel stack and
+	 * carry the resume PC in pt_regs is the prerequisite for real multitasking here;
+	 * until then this gives one user task a preemptible, tick-driven kernel.
+	 */
+	if (cause == SUBLEQ_CAUSE_TIMER) {
+		subleq_do_IRQ(regs);            /* jiffies, timer wheel, softirqs */
+		subleq_trap_return_work(regs);
+		return;
+	}
+
 	if (cause == SUBLEQ_CAUSE_SYSCALL) {
 		__subleq_syscall_c(PT_REG_GET(regs, r21), PT_REG_GET(regs, r22),
 				   PT_REG_GET(regs, r23), PT_REG_GET(regs, r24),
@@ -181,46 +230,14 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 	do_page_fault(regs, addr, cause, access);
 
 	/*
-	 * Return-to-user work for the FAULT path.
-	 *
-	 * Previously omitted entirely: a fault that raised a signal (e.g.
-	 * force_sig_fault(SIGSEGV) from bad_area on an illegal access) would RTE
-	 * straight back to the faulting instruction and re-fault forever, because
-	 * the pending signal was never delivered — an unrecoverable user fault
-	 * hung the whole machine instead of killing the task. Mirror the syscall
-	 * return path (syscall_entry.c __subleq_syscall_c out:) so pending signals
-	 * and task_work run before we RTE.
-	 *
-	 * For an unhandled fatal SIGSEGV, get_signal() takes the default path
-	 * (do_exit / panic("kill init") for PID1) and never returns here — a
-	 * clean, diagnosable failure. If a handler is installed, setup_rt_frame()
-	 * rewrites pt_regs->pc to the handler entry.
+	 * Then the shared return-to-user work. Previously omitted entirely: a fault that
+	 * raised a signal (e.g. force_sig_fault(SIGSEGV) from bad_area on an illegal access)
+	 * would RTE straight back to the faulting instruction and re-fault forever, because
+	 * the pending signal was never delivered -- an unrecoverable user fault hung the whole
+	 * machine instead of killing the task. For an unhandled fatal SIGSEGV, get_signal()
+	 * takes the default path (do_exit / panic("kill init") for PID 1) and never returns.
 	 */
-	{
-		bool handled_sig = false;
-
-		if (need_resched())
-			schedule();
-		if (test_thread_flag(TIF_SIGPENDING) ||
-		    test_thread_flag(TIF_NOTIFY_SIGNAL))
-			handled_sig = do_signal(regs);
-		if (test_thread_flag(TIF_NOTIFY_RESUME))
-			resume_user_mode_work(regs);
-
-		/*
-		 * Adopt pt_regs->pc as the RTE resume target ONLY when do_signal()
-		 * actually set up a handler (setup_rt_frame() just rewrote pt_regs->pc
-		 * to the handler entry). For a plain demand fault, DO NOT touch
-		 * subleq_fault_saved_pc: leave the value stashed at fault entry (the
-		 * faulting instruction, for restart). pt_regs->pc must NOT be trusted
-		 * here for the restart case — it can be stale/corrupt for a demand
-		 * fault, and blindly resuming from it sends the task to a wild pc.
-		 * (For an unhandled fatal SIGSEGV, do_signal() -> get_signal() takes
-		 * the default path -> do_exit/panic and never returns here.)
-		 */
-		if (handled_sig)
-			subleq_fault_saved_pc = PT_REG_GET(regs, pc) >> 2;
-	}
+	subleq_trap_return_work(regs);
 }
 
 /*

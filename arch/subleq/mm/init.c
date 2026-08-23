@@ -12,6 +12,7 @@
 #include <asm/setup.h>
 #ifdef CONFIG_MMU
 #include <asm/pgtable.h>
+#include <linux/time64.h>		/* USEC_PER_SEC */
 #include <asm/subleq-cr.h>
 
 /* Kernel page directory (init_mm.pgd). The kernel is identity-mapped in supervisor
@@ -93,6 +94,25 @@ void __init paging_init(void)
 	/* Install the user syscall gate: when a user pc reaches this vaddr the VM raises
 	 * CAUSE_SYSCALL. Fixed word index 0x2000 (byte 0x8000); userspace jumps here. */
 	subleq_set_sysgate(0x2000);
+
+	/*
+	 * Ask the machine to preempt a user task that runs a whole timeslice without
+	 * trapping. Without this the cable timer (supervisor-mode only) can never
+	 * interrupt user code, so a compute-bound user loop that never syscalls owns the
+	 * CPU forever -- the kernel would lose control of a task it is supposed to police.
+	 * The VM restarts the count on every return to user, so a task that traps
+	 * regularly (as DOOM does, ~170 syscalls a second) rarely pays anything; only a
+	 * task that runs a whole slice without trapping is interrupted.
+	 *
+	 * 50 ms, NOT one jiffy: a trap into this kernel costs ~230-330k guest
+	 * instructions, so the slice length is a real throughput decision. Measured with
+	 * fbdoom (docs/mmu-performance.md in the lunatix repo): 10 ms costs 35% of the
+	 * frame rate, 50 ms costs 9%, 100 ms costs 6%. 50 ms bounds a runaway task at a
+	 * twentieth of a second -- below human perception -- for a price we can pay. Lower
+	 * it once the tick itself gets cheaper (its cost is 64-bit time arithmetic in
+	 * subleq_do_IRQ, via the shift helpers).
+	 */
+	subleq_set_quantum(50000);
 #endif
 }
 

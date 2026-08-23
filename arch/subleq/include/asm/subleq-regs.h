@@ -112,6 +112,12 @@
 .set CR_FAULT_ACC,  -96   /* word -24 : access type of last fault (R/W/X)          */
 .set CR_KPTB,      -100   /* word -25 : kernel page-table base (vmalloc window)    */
 .set CR_SYSGATE,   -104   /* word -26 : user syscall-gate vaddr (word idx); 0=off  */
+.set CR_QUANTUM,   -108   /* word -27 : user-mode timeslice in MICROSECONDS; 0=off *
+                           * The cable timer (m[0]/m[1]) is delivered in supervisor *
+                           * mode only, so a user task that neither syscalls nor    *
+                           * faults could never be preempted. Programming this makes*
+                           * the VM deliver CAUSE_TIMER through CR_VECTOR once a    *
+                           * task has run this long without trapping.               */
 
 /*
  * Sound-card MMIO registers (lunatix VM) — RELOCATED (toolchain-cleanup §8 Phase 2) from

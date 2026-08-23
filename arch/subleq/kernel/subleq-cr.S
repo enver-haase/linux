@@ -66,6 +66,21 @@ subleq_set_sysgate:
  * index; 0 = supervisor stays fully identity). Called once during MMU bring-up with
  * __pa(swapper_pg_dir) >> 2.
  */
+/*
+ * void subleq_set_quantum(unsigned long usec)
+ *
+ * Set CR_QUANTUM: how long a user task may run WITHOUT trapping before the VM preempts it
+ * with CAUSE_TIMER through CR_VECTOR (microseconds; 0 = no user preemption). The kernel
+ * picks its own timeslice here, the way it would program a timer chip. MMU only -- the CR
+ * block does not exist on the NOMMU machine.
+ */
+	.globl subleq_set_quantum
+	.type subleq_set_quantum, @function
+subleq_set_quantum:
+	.word	REG_R21, CR_QUANTUM, .+4	/* CR_QUANTUM := mem[R21] (arg1)        */
+	.word	REG_T0, REG_T0, REG_RA | INDIRECT /* return: T0=0 (branch) -> *RA        */
+	.size	subleq_set_quantum, . - subleq_set_quantum
+
 	.globl subleq_set_kptb
 	.type subleq_set_kptb, @function
 subleq_set_kptb:
