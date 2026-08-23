@@ -266,10 +266,29 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
  * (Name kept for callers; despite "page0" it now maps page 1.) Called from start_thread()
  * and copy_thread().
  */
+/*
+ * The register file page needs to be described by a vma, not merely mapped.
+ *
+ * Everything the kernel does to an address space is vma-driven: free_pgtables() walks vma ranges
+ * to free page tables, unmap walks them to tear mappings down. A PTE with no vma behind it is
+ * invisible to all of it -- the page table leaked on every exit (`non-zero pgtables_bytes on
+ * freeing mm: 4096`, exactly one page), and a mapping the kernel cannot see is a mapping it
+ * cannot unmap.
+ *
+ * So the mapping is wrapped in a special-mapping vma, which is what other architectures use for
+ * the same kind of kernel-provided page (vDSO, gate pages). VM_PFNMAP says the page is a raw pfn
+ * with no struct page accounting, which is correct here: physical page 1 is reserved memory
+ * holding the relocated ESI register file, shared with the VM.
+ */
+static const struct vm_special_mapping subleq_regfile_mapping = {
+	.name = "[regfile]",
+};
+
 void subleq_map_page0(struct mm_struct *mm)
 {
 	unsigned long addr = PAGE_SIZE;            /* page 1 = the relocated register file */
 	const unsigned long regfile_pfn = 1;       /* physical page 1 = shared register bank */
+	struct vm_area_struct *vma;
 	pgd_t *pgd;
 	p4d_t *p4d;
 	pud_t *pud;
@@ -277,6 +296,16 @@ void subleq_map_page0(struct mm_struct *mm)
 	pte_t *pte;
 
 	mmap_write_lock(mm);
+
+	vma = _install_special_mapping(mm, addr, PAGE_SIZE,
+				       VM_READ | VM_WRITE | VM_SHARED | VM_PFNMAP | VM_IO |
+				       VM_DONTEXPAND | VM_DONTDUMP,
+				       &subleq_regfile_mapping);
+	if (IS_ERR(vma))
+		pr_warn("subleq: no vma for the register file page (%ld)\n", PTR_ERR(vma));
+
+	/* The PTE is installed by hand rather than faulted in: the special mapping carries no
+	 * pages of its own, and this pfn must be there before the first user instruction runs. */
 	pgd = pgd_offset(mm, addr);
 	p4d = p4d_alloc(mm, pgd, addr);
 	pud = p4d ? pud_alloc(mm, p4d, addr) : NULL;
