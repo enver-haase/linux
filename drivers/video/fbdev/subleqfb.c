@@ -20,6 +20,7 @@
 #include <linux/fb.h>
 #include <linux/io.h>
 #include <linux/console.h>
+#include <linux/fbcon.h>
 #include <linux/workqueue.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
@@ -204,8 +205,20 @@ static void subleqfb_copyarea(struct fb_info *info, const struct fb_copyarea *ar
  * Byte addresses, via readl/writel, matching how time.c reaches the clock registers.
  */
 #define SUBLEQ_REG_FB_OFFSET  24        /* word 6 */
-#define SUBLEQ_REG_FB_WIDTH   28        /* word 7 */
-#define SUBLEQ_REG_FB_HEIGHT  32        /* word 8 */
+#define SUBLEQ_REG_FB_WIDTH   312       /* word 78 */
+#define SUBLEQ_REG_FB_HEIGHT  316       /* word 79 */
+#define SUBLEQ_REG_FB_MAGIC   320       /* word 80 */
+/* 'LMOD': tells the VM that words 78/79 really are a framebuffer mode. Words 7 and 8 were the
+ * obvious choice, sitting beside the framebuffer base in word 6 -- and wrong: cable's NOMMU
+ * guest uses them for its own purposes, so the host read a "7x16 mode" out of another guest's
+ * scratch. Publishing the magic last is deliberate: the VM never sees a mode announced before
+ * the geometry that goes with it. */
+#define SUBLEQ_FB_MODE_MAGIC  0x4C4D4F44
+/* Why the console mode restore does or does not happen, published where the host can read it:
+ * word 81 counts fb_release calls that asked for a restore, word 82 counts restores actually
+ * performed. There is no console to print to once tty0 owns it. */
+#define SUBLEQ_REG_FB_RELEASES 324      /* word 81 */
+#define SUBLEQ_REG_FB_RESTORES 328      /* word 82 */
 /* Diagnostics, published the same way. Console output is unreliable here -- once tty0 takes
  * over, stdout goes dark -- so the zero page is the one channel that always reaches the host:
  * word 9 counts fb_set_par calls, word 10 records the width check_var last saw. Together they
@@ -228,14 +241,29 @@ static void subleqfb_restore_fn(struct work_struct *work)
 {
         struct fb_info *info = subleqfb_restore_target;
         struct fb_var_screeninfo var;
+        static u32 restores;
 
         if (!info)
                 return;
+        writel(++restores, (void __iomem *)SUBLEQ_REG_FB_RESTORES);
         var = subleqfb_console_var;
+        /*
+         * FORCE, and NOW. fb_set_var() has two silent exits: it returns success without doing
+         * anything when the var matches the current one bit for bit, and again when activate
+         * does not say FB_ACTIVATE_NOW -- and the var captured at probe carries whatever fbcon
+         * left in that field. Both exits look like a successful restore while leaving the
+         * console in the application's resolution.
+         */
+        var.activate = FB_ACTIVATE_NOW | FB_ACTIVATE_FORCE;
         console_lock();
         lock_fb_info(info);
-        if (fb_set_var(info, &var))
+        if (fb_set_var(info, &var)) {
                 pr_warn("subleq_fb: could not restore the console mode\n");
+        } else {
+                /* Changing the mode is not enough: the text console still believes in the old
+                 * geometry until it is told to lay itself out again. */
+                fbcon_update_vcs(info, true);
+        }
         unlock_fb_info(info);
         console_unlock();
 }
@@ -244,8 +272,11 @@ static DECLARE_WORK(subleqfb_restore_work, subleqfb_restore_fn);
 
 static int subleqfb_release(struct fb_info *info, int user)
 {
+        static u32 releases;
+
         if (user && (info->var.xres != subleqfb_console_var.xres ||
                      info->var.yres != subleqfb_console_var.yres)) {
+                writel(++releases, (void __iomem *)SUBLEQ_REG_FB_RELEASES);
                 subleqfb_restore_target = info;
                 schedule_work(&subleqfb_restore_work);
         }
@@ -257,6 +288,7 @@ static void subleqfb_publish(struct fb_info *info)
         writel(SUBLEQFB_FB_ADDR >> 2, (void __iomem *)SUBLEQ_REG_FB_OFFSET);
         writel(info->var.xres,        (void __iomem *)SUBLEQ_REG_FB_WIDTH);
         writel(info->var.yres,        (void __iomem *)SUBLEQ_REG_FB_HEIGHT);
+        writel(SUBLEQ_FB_MODE_MAGIC,  (void __iomem *)SUBLEQ_REG_FB_MAGIC);
 }
 
 /*
