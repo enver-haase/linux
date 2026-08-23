@@ -135,6 +135,24 @@ void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long sp)
 
 	PT_REG_SET(regs, pc, pc);
 	PT_REG_SET(regs, sp, sp);
+	/*
+	 * Where the new image actually resumes. execve() reaches userspace through the syscall
+	 * return path, and that path does not use pt_regs->pc at all: it recomputes the RTE
+	 * target as (ra >> 2) AFTER the syscall handler has run (see the CAUSE_SYSCALL case in
+	 * handle_fault), because a normal syscall returns to the instruction after the gate
+	 * call. memset() above left ra at 0, so every exec'd image resumed at word 0 -- the
+	 * NULL guard under MMU -- and died with SIGSEGV before its first instruction:
+	 *     doom[22]: segfault at 0 pc 0 sp 2f8a3f20 access 2 cause 2
+	 * So ra has to name the entry point. rte_pc is set too, for the return paths that use
+	 * it directly rather than deriving it from ra.
+	 *
+	 * This went unnoticed because nothing on this port had ever exec'd a second binary:
+	 * DOOM was always PID 1, started by kernel_execve (a different first return to user),
+	 * and the fork test only forked. It is the bug that kept the MMU userspace at exactly
+	 * one process.
+	 */
+	PT_REG_SET(regs, ra, pc);
+	PT_REG_SET(regs, rte_pc, pc >> 2);
 	/* r3 = 0 is already set by memset, marking this as a user thread */
 
 #ifdef CONFIG_MMU
