@@ -170,8 +170,50 @@ static long dsp_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 	}
 }
 
+/*
+ * Silence the card when its last user closes it.
+ *
+ * A process that exits mid-note leaves the note sounding: the VM's OPL keeps whatever it was
+ * given, and the PCM ring keeps being consumed. Nothing else was going to clear it -- the guest
+ * that would have is gone -- so it is the driver's job, exactly as restoring the console mode is
+ * the framebuffer driver's. Otherwise quitting the game leaves the machine humming.
+ *
+ * OPL_CMD_FLUSH is the VM's "stop everything now" command (it forces the release phase on every
+ * voice), which is precisely what is wanted here and already implemented on the host side.
+ */
+#define OPL_CMD_FLUSH		0x1FF
+#define OPL_PACK(reg, val)	((((unsigned long)(reg) & 0x1FF) << 8) | ((val) & 0xFF))
+
+static int opl_release(struct inode *inode, struct file *f)
+{
+	subleq_opl_write(OPL_PACK(OPL_CMD_FLUSH, 0));
+	return 0;
+}
+
+static int dsp_open(struct inode *inode, struct file *f)
+{
+	/* Re-arm: the ring is disarmed on release, so a second player has to find it armed. */
+	mutex_lock(&pcm_lock);
+	subleq_pcm_set_rate(pcm_rate);
+	subleq_pcm_set_frames(PCM_RING_FRAMES);
+	subleq_pcm_set_base((unsigned long)__pa(pcm_ring) >> 2);
+	mutex_unlock(&pcm_lock);
+	return 0;
+}
+
+static int dsp_release(struct inode *inode, struct file *f)
+{
+	/* Disarm the ring so the host stops consuming stale audio the moment the player is gone. */
+	mutex_lock(&pcm_lock);
+	subleq_pcm_set_base(0);
+	mutex_unlock(&pcm_lock);
+	return 0;
+}
+
 static const struct file_operations dsp_fops = {
 	.owner		= THIS_MODULE,
+	.open		= dsp_open,
+	.release	= dsp_release,
 	.write		= dsp_write,
 	.unlocked_ioctl	= dsp_ioctl,
 };
@@ -207,6 +249,7 @@ static ssize_t opl_write(struct file *f, const char __user *buf, size_t count,
 
 static const struct file_operations opl_fops = {
 	.owner		= THIS_MODULE,
+	.release	= opl_release,
 	.write		= opl_write,
 };
 
