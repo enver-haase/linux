@@ -18,6 +18,9 @@
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/fb.h>
+#include <linux/io.h>
+#include <linux/console.h>
+#include <linux/workqueue.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
 
@@ -192,6 +195,110 @@ static void subleqfb_copyarea(struct fb_info *info, const struct fb_copyarea *ar
 	}
 }
 
+/*
+ * Tell the VM what we are displaying. The host reads three zero-page words: the framebuffer
+ * base (word 6, a WORD index) and the live mode (words 7 and 8). Without the mode words the
+ * host would have to assume a fixed resolution -- which is exactly the bug that made DOOM
+ * audible but invisible when the geometry changed underneath a hardcoded constant.
+ *
+ * Byte addresses, via readl/writel, matching how time.c reaches the clock registers.
+ */
+#define SUBLEQ_REG_FB_OFFSET  24        /* word 6 */
+#define SUBLEQ_REG_FB_WIDTH   28        /* word 7 */
+#define SUBLEQ_REG_FB_HEIGHT  32        /* word 8 */
+/* Diagnostics, published the same way. Console output is unreliable here -- once tty0 takes
+ * over, stdout goes dark -- so the zero page is the one channel that always reaches the host:
+ * word 9 counts fb_set_par calls, word 10 records the width check_var last saw. Together they
+ * say whether a mode request arrived, was accepted, and took effect. */
+#define SUBLEQ_REG_FB_SETPARS 36        /* word 9  */
+#define SUBLEQ_REG_FB_LASTREQ 40        /* word 10 */
+
+/*
+ * The mode the console wants, captured at probe, and the machinery to put it back.
+ *
+ * fb_set_var() has to run with the console lock and the fb_info lock held, and fb_release()
+ * is already called under the latter -- so the restore is deferred to a work item rather than
+ * done inline. The alternative (letting the application switch back on its way out) is not
+ * equivalent: an application that segfaults never gets to.
+ */
+static struct fb_var_screeninfo subleqfb_console_var;
+static struct fb_info *subleqfb_restore_target;
+
+static void subleqfb_restore_fn(struct work_struct *work)
+{
+        struct fb_info *info = subleqfb_restore_target;
+        struct fb_var_screeninfo var;
+
+        if (!info)
+                return;
+        var = subleqfb_console_var;
+        console_lock();
+        lock_fb_info(info);
+        if (fb_set_var(info, &var))
+                pr_warn("subleq_fb: could not restore the console mode\n");
+        unlock_fb_info(info);
+        console_unlock();
+}
+
+static DECLARE_WORK(subleqfb_restore_work, subleqfb_restore_fn);
+
+static int subleqfb_release(struct fb_info *info, int user)
+{
+        if (user && (info->var.xres != subleqfb_console_var.xres ||
+                     info->var.yres != subleqfb_console_var.yres)) {
+                subleqfb_restore_target = info;
+                schedule_work(&subleqfb_restore_work);
+        }
+        return 0;
+}
+
+static void subleqfb_publish(struct fb_info *info)
+{
+        writel(SUBLEQFB_FB_ADDR >> 2, (void __iomem *)SUBLEQ_REG_FB_OFFSET);
+        writel(info->var.xres,        (void __iomem *)SUBLEQ_REG_FB_WIDTH);
+        writel(info->var.yres,        (void __iomem *)SUBLEQ_REG_FB_HEIGHT);
+}
+
+/*
+ * Accept any mode that fits the reservation, at our one depth. Nothing here has a pixel clock
+ * or a scanout engine to satisfy: a mode is just a width, a height and a stride.
+ */
+static int subleqfb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
+{
+        writel(var->xres, (void __iomem *)SUBLEQ_REG_FB_LASTREQ);
+        if (var->bits_per_pixel != SUBLEQFB_BPP)
+                return -EINVAL;
+        if (!var->xres || !var->yres)
+                return -EINVAL;
+        if (var->xres > SUBLEQ_FB_MAX_WIDTH || var->yres > SUBLEQ_FB_MAX_HEIGHT)
+                return -EINVAL;
+        if ((u32)var->xres * var->yres * (SUBLEQFB_BPP / 8) > SUBLEQFB_FB_SIZE)
+                return -EINVAL;
+
+        var->xres_virtual = var->xres;
+        var->yres_virtual = var->yres;
+        var->xoffset = 0;
+        var->yoffset = 0;
+        var->red.offset = 16; var->red.length = 8;
+        var->green.offset = 8; var->green.length = 8;
+        var->blue.offset = 0; var->blue.length = 8;
+        var->transp.offset = 0; var->transp.length = 0;
+        return 0;
+}
+
+static int subleqfb_set_par(struct fb_info *info)
+{
+        static u32 set_pars;
+
+        writel(++set_pars, (void __iomem *)SUBLEQ_REG_FB_SETPARS);
+        info->fix.line_length = info->var.xres * (SUBLEQFB_BPP / 8);
+        subleqfb_console_var = info->var;      /* the mode to come back to */
+        subleqfb_publish(info);
+        pr_info("subleq_fb: mode %ux%u, stride %u bytes\n",
+                info->var.xres, info->var.yres, info->fix.line_length);
+        return 0;
+}
+
 /* Draw image (for fonts/cursors) - optimized for 8-pixel batches */
 static void subleqfb_imageblit(struct fb_info *info, const struct fb_image *image)
 {
@@ -286,6 +393,9 @@ static const struct fb_ops subleqfb_ops = {
 	.owner          = THIS_MODULE,
 	__FB_DEFAULT_SYSMEM_OPS_RDWR,
 	.fb_setcolreg   = subleqfb_setcolreg,
+	.fb_check_var   = subleqfb_check_var,
+	.fb_set_par     = subleqfb_set_par,
+	.fb_release     = subleqfb_release,
 	.fb_mmap        = subleqfb_mmap,
 	/* Custom word-only drawing operations */
 	.fb_fillrect    = subleqfb_fillrect,

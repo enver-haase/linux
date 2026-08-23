@@ -15,10 +15,20 @@
  * 320x200 frame and centre it in a black border -- 256000 pixel writes per frame of pure
  * presentation work, on a CPU that spends four instructions on a word copy. Scaling is the
  * host s job; it has a GPU for it. */
-#define SUBLEQ_FB_WIDTH       320
-#define SUBLEQ_FB_HEIGHT      200
+/*
+ * The framebuffer has MODES. The console wants to be big; DOOM renders 320x200 and wants the
+ * host to scale that up rather than paying to scale it itself. So the reservation covers the
+ * LARGEST mode, and the driver switches var.xres/yres within it, publishing the live geometry
+ * to the VM (zero-page words 7 and 8) so the host knows what it is presenting.
+ *
+ * Defaults to the large mode: that is the console, and it is what a machine should come up in.
+ */
+#define SUBLEQ_FB_MAX_WIDTH   1280
+#define SUBLEQ_FB_MAX_HEIGHT  960
+#define SUBLEQ_FB_WIDTH       SUBLEQ_FB_MAX_WIDTH
+#define SUBLEQ_FB_HEIGHT      SUBLEQ_FB_MAX_HEIGHT
 #define SUBLEQ_FB_BPP         32      /* XRGB8888: 32-bit per pixel */
-#define SUBLEQ_FB_PIXELS      (SUBLEQ_FB_WIDTH * SUBLEQ_FB_HEIGHT * (SUBLEQ_FB_BPP / 8))
+#define SUBLEQ_FB_PIXELS      (SUBLEQ_FB_MAX_WIDTH * SUBLEQ_FB_MAX_HEIGHT * (SUBLEQ_FB_BPP / 8))
 /* The reservation is rounded up to a whole page, which is what makes SUBLEQ_FB_ADDR land on a
  * page boundary. It has to: the region is memblock-reserved and then mmapped into userspace by
  * the fb driver, so a base halfway into a page both breaks the mapping and leaves the other
