@@ -17,6 +17,7 @@
  */
 
 #include <linux/mm.h>
+#include <asm/unistd.h>
 #include <linux/sched.h>
 #include <linux/sched/signal.h>
 #include <linux/interrupt.h>
@@ -125,6 +126,13 @@ bad_area_nosem:
 			current->comm, task_pid_nr(current), addr,
 			(unsigned long)PT_REG_GET(regs, pc),
 			(unsigned long)PT_REG_GET(regs, sp), access, cause);
+		/* Where the resume target came from matters more than the address itself when the
+		 * fault is an instruction fetch: pc == addr means the task was RESUMED there. */
+		pr_info("  ra %lx  rte_pc %lx (x4 = %lx)  fp %lx  syscall_nr %ld\n",
+			(unsigned long)PT_REG_GET(regs, ra),
+			(unsigned long)PT_REG_GET(regs, rte_pc),
+			(unsigned long)PT_REG_GET(regs, rte_pc) << 2,
+			(unsigned long)PT_REG_GET(regs, fp), (long)regs->syscall_nr);
 		force_sig_fault(SIGSEGV, code, (void __user *)addr);
 		return;
 	}
@@ -199,6 +207,56 @@ static void subleq_trap_return_work(struct pt_regs *regs)
 		PT_REG_SET(regs, rte_pc, PT_REG_GET(regs, pc) >> 2);
 }
 
+
+/*
+ * A resume target has to be somewhere this task can actually execute. Anything else means a trap
+ * path handed back a value that is not this task's PC, and returning to it produces a bare
+ * "segfault at <some address>" one instruction later, with nothing to say where it came from.
+ *
+ * Range tests are useless here: the kernel is identity-mapped at low physical addresses, so
+ * kernel text and low user addresses are the same numbers. Ask the address space instead. This
+ * caught the signal trampoline running from kernel text, which killed the shell after every
+ * command that produced a SIGCHLD.
+ */
+#define SUBLEQ_USER_GATE_ADDR	0x8000UL	/* mm/init.c: subleq_set_sysgate(0x2000) words */
+static void subleq_check_rte(struct pt_regs *regs, const char *where,
+			     unsigned long cause, unsigned long access)
+{
+	unsigned long target = PT_REG_GET(regs, rte_pc) << 2;
+	struct mm_struct *mm = current->mm;
+	struct vm_area_struct *vma;
+
+	if (!mm)
+		return;
+	/*
+	 * The syscall gate is a trapping address, not memory: resuming there is how a restarted
+	 * syscall re-enters the kernel, so it is never a mistake.
+	 */
+	if (target == SUBLEQ_USER_GATE_ADDR)
+		return;
+	if (!mmap_read_trylock(mm))
+		return;                 /* cannot tell without blocking; say nothing */
+	vma = find_vma(mm, target);
+	if (vma && vma->vm_start > target)
+		vma = NULL;             /* find_vma returns the NEXT vma when there is no hit */
+	mmap_read_unlock(mm);
+	/*
+	 * Executability is deliberately not checked: this machine has no NX bit, anything mapped
+	 * can be fetched from, and the signal trampoline really does run from the user stack.
+	 */
+	if (likely(vma))
+		return;
+
+	pr_err("subleq: BAD RTE TARGET in %s: %s[%d] would resume at %lx, which is not mapped\n",
+	       where, current->comm, task_pid_nr(current), target);
+	pr_err("subleq:   cause %lu access %lu  pc %lx ra %lx sp %lx fp %lx\n",
+	       cause, access,
+	       (unsigned long)PT_REG_GET(regs, pc), (unsigned long)PT_REG_GET(regs, ra),
+	       (unsigned long)PT_REG_GET(regs, sp), (unsigned long)PT_REG_GET(regs, fp));
+	pr_err("subleq:   syscall_nr %ld  global fault_saved_pc %lx (x4 = %lx)  regs at %px\n",
+	       (long)regs->syscall_nr, subleq_fault_saved_pc, subleq_fault_saved_pc << 2, regs);
+}
+
 asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 			    unsigned long cause, unsigned long access)
 {
@@ -229,19 +287,30 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 	if (cause == SUBLEQ_CAUSE_TIMER) {
 		subleq_do_IRQ(regs);            /* jiffies, timer wheel, softirqs */
 		subleq_trap_return_work(regs);
+		subleq_check_rte(regs, "timer", cause, access);
 		return;
 	}
 
 	if (cause == SUBLEQ_CAUSE_SYSCALL) {
+		unsigned long nr = PT_REG_GET(regs, r21);
+
 		__subleq_syscall_c(PT_REG_GET(regs, r21), PT_REG_GET(regs, r22),
 				   PT_REG_GET(regs, r23), PT_REG_GET(regs, r24),
 				   PT_REG_GET(regs, r25), PT_REG_GET(regs, r26),
 				   PT_REG_GET(regs, r27));
-		/* Resume in user mode at the instruction after the gate call. */
-		PT_REG_SET(regs, rte_pc, PT_REG_GET(regs, ra) >> 2);
+		/*
+		 * Resume in user mode at the instruction after the gate call -- except for
+		 * rt_sigreturn, which restores the interrupted context itself (including the
+		 * resume target it saved in the signal frame). Overwriting it from ra there
+		 * would return the handler's caller to wherever the handler happened to link.
+		 */
+		if (nr != __NR_rt_sigreturn)
+			PT_REG_SET(regs, rte_pc, PT_REG_GET(regs, ra) >> 2);
+		subleq_check_rte(regs, "syscall", cause, access);
 		return;
 	}
 	do_page_fault(regs, addr, cause, access);
+	subleq_check_rte(regs, "fault-entry", cause, access);
 
 	/*
 	 * Then the shared return-to-user work. Previously omitted entirely: a fault that

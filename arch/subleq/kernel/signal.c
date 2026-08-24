@@ -46,7 +46,44 @@ struct rt_sigframe {
 	void __user *puc;            /* Pointer to uc below */
 	struct siginfo info;         /* Signal info */
 	struct ucontext uc;          /* User context with saved regs/mask */
+	/*
+	 * Kernel-private tail. Userspace only ever looks at the four fields above, so adding
+	 * here changes nothing it can see.
+	 */
+	unsigned long retcode[10];   /* the rt_sigreturn trampoline (see setup_rt_frame) */
+	unsigned long rte_pc;        /* resume target at delivery: not part of sigcontext */
 };
+
+/*
+ * The trampoline, as subleq words. Three instructions and a constant:
+ *
+ *   R21 = 0                       ; the syscall number register
+ *   R21 -= (-__NR_rt_sigreturn)   ; = __NR_rt_sigreturn
+ *   Z   -= Z                      ; = 0, so the branch is always taken -> the syscall gate
+ *
+ * Operands are absolute byte addresses, which is why this is built per frame rather than kept as
+ * a constant blob: the two branch targets and the constant's address depend on where the frame
+ * landed on the user stack. The register file is mapped into every user address space at
+ * SUBLEQ_REG_BASE (that is how user code reaches its own registers), so those addresses are the
+ * same numbers the kernel uses.
+ */
+#define SUBLEQ_REG_BASE_BYTES	4096UL		/* asm/subleq-regs.h: .set REG_BASE, 4096 */
+#define SUBLEQ_REG_Z		(SUBLEQ_REG_BASE_BYTES + 12)	/* .set REG_Z,   REG_BASE + 12  */
+#define SUBLEQ_REG_R21		(SUBLEQ_REG_BASE_BYTES + 100)	/* .set REG_R21, REG_BASE + 100 */
+#define SUBLEQ_USER_GATE	0x8000UL	/* mm/init.c: subleq_set_sysgate(0x2000) words */
+
+static int subleq_put_sigtramp(struct rt_sigframe __user *frame)
+{
+	unsigned long t = (unsigned long)frame->retcode;
+	unsigned long code[10] = {
+		SUBLEQ_REG_R21, SUBLEQ_REG_R21, t + 12,		/* R21 = 0                    */
+		t + 36,         SUBLEQ_REG_R21, t + 24,		/* R21 -= -__NR_rt_sigreturn  */
+		SUBLEQ_REG_Z,   SUBLEQ_REG_Z,   SUBLEQ_USER_GATE, /* Z = 0 -> jump to the gate */
+		(unsigned long)-(long)__NR_rt_sigreturn,	/* the constant, at t + 36    */
+	};
+
+	return copy_to_user(frame->retcode, code, sizeof(code)) ? -EFAULT : 0;
+}
 
 /*
  * Save registers to sigcontext. PT_REG_GET converts from negated
@@ -238,7 +275,10 @@ static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
 		return -EFAULT;
 
 	/* Set up the frame header */
-	err |= __put_user((void *)ret_from_user_rt_signal, &frame->pretcode);
+	err |= subleq_put_sigtramp(frame);
+	err |= __put_user((void *)frame->retcode, &frame->pretcode);
+	/* The resume target is per task and not in sigcontext; carry it in the frame. */
+	err |= __put_user((unsigned long)PT_REG_GET(regs, rte_pc), &frame->rte_pc);
 	err |= __put_user(ksig->sig, &frame->sig);
 	err |= __put_user(&frame->info, &frame->pinfo);
 	err |= __put_user(&frame->uc, &frame->puc);
@@ -279,7 +319,7 @@ static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
 	 * RA-Direct: Set RA to trampoline address.
 	 * The handler will return via JMP RA|I, jumping to the trampoline.
 	 */
-	PT_REG_SET(regs, ra, (unsigned long)ret_from_user_rt_signal);
+	PT_REG_SET(regs, ra, (unsigned long)frame->retcode);
 
 	return 0;
 }
@@ -465,6 +505,18 @@ asmlinkage long sys_rt_sigreturn(void)
 	/* Restore alternate signal stack */
 	if (restore_altstack(&frame->uc.uc_stack))
 		goto badframe;
+
+	/*
+	 * And the resume target saved at delivery. Without this the trap exit would compute it
+	 * from ra, which is the right thing after an ordinary syscall and wrong here: this call
+	 * restores a context that may have been interrupted anywhere.
+	 */
+	{
+		unsigned long rte;
+
+		if (!__get_user(rte, &frame->rte_pc))
+			PT_REG_SET(regs, rte_pc, rte);
+	}
 
 	/*
 	 * If the restored context was in a syscall with a restart error
