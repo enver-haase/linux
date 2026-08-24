@@ -199,14 +199,21 @@ static int __init subleq_tty_init(void)
 		return ret;
 	}
 
-	/* Disable early console to avoid duplicate output via __subleq_putchar */
-	{
+	/* Register console */
+	register_console(&subleq_console);
+
+	/*
+	 * Both consoles write to the same place (__subleq_putchar -> the host's stdout), so only
+	 * one of them may be live. Which one depends on the command line: register_console()
+	 * enables this console only if it was asked for (console=ttyS0). With console=tty0 it
+	 * stays disabled, and muting the early console then takes every later printk off the host
+	 * channel -- boot logs used to end at "subleq_tty: initializing", so a fault report after
+	 * boot was visible only on the framebuffer, in a screenshot.
+	 */
+	if (subleq_console.flags & CON_ENABLED) {
 		extern int subleq_early_disabled;
 		subleq_early_disabled = 1;
 	}
-
-	/* Register console */
-	register_console(&subleq_console);
 
 	pr_info("subleq_tty: registered, device ttyS0\n");
 	return 0;
