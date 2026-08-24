@@ -3118,6 +3118,11 @@ __subleq_syscall:
         .word   0               /* Dedicated scratch for hazard range check */
 .Lhazard_saved_z:
         .word   0               /* INT_Z, negated, across the hazard check (see .Lin_hazard) */
+.Lfault_bytepc:
+        .word   0               /* faulting PC in BYTES, built by subleq_fault_entry.
+                                 * Deliberately not m[1]: the VM writes the interrupted PC there
+                                 * on every timer interrupt, before any handler instruction runs,
+                                 * so m[1] cannot survive an interruptible window. */
 .Lconst_entry_start_m1:
         .word   subleq_irq_entry - 1   /* Lower bound (exclusive) for range check */
 .Lconst_entry_size:
@@ -3303,13 +3308,15 @@ subleq_fault_entry:
         .word   CR_SAVED_PC, INT_Z, .+4              /* INT_Z = -saved_pc (word)  */
         .word   INT_Z, subleq_fault_saved_pc, .+4           /* subleq_fault_saved_pc = +saved_pc*/
 
-        /* --- INT_SAVED_PC (m[1]) = CR_SAVED_PC * 4 (byte addr for pt_regs->pc,
-         *     matching the timer path's pc field convention). INT_Z still = -wpc. */
-        .word   INT_SAVED_PC, INT_SAVED_PC, .+4      /* m[1] = 0                  */
-        .word   INT_Z, INT_SAVED_PC, .+4             /* m[1] += wpc  (1x)         */
-        .word   INT_Z, INT_SAVED_PC, .+4             /* m[1] += wpc  (2x)         */
-        .word   INT_Z, INT_SAVED_PC, .+4             /* m[1] += wpc  (3x)         */
-        .word   INT_Z, INT_SAVED_PC, .+4             /* m[1] += wpc  (4x) = bytepc*/
+        /* --- byte address of the faulting PC = CR_SAVED_PC * 4, for pt_regs->pc (matching the
+         *     timer path's pc field convention). INT_Z still = -wpc. Built in a private cell:
+         *     m[1] is the interrupt's mailbox and is overwritten by the VM on every timer, so
+         *     using it here loses the sum whenever a timer lands mid-accumulation. */
+        .word   .Lfault_bytepc, .Lfault_bytepc, .+4  /* bytepc = 0                */
+        .word   INT_Z, .Lfault_bytepc, .+4           /* bytepc += wpc  (1x)       */
+        .word   INT_Z, .Lfault_bytepc, .+4           /* bytepc += wpc  (2x)       */
+        .word   INT_Z, .Lfault_bytepc, .+4           /* bytepc += wpc  (3x)       */
+        .word   INT_Z, .Lfault_bytepc, .+4           /* bytepc += wpc  (4x) = byte*/
 
         /* --- PHASE 0c: save interrupted (user) SP; then switch to kernel stack.
          *     We always come from user mode, so the switch is unconditional
@@ -3383,7 +3390,7 @@ subleq_fault_entry:
         .word   INT_Z, INT_Z2 | INDIRECT, .+4
 
         FAULT_STORE REG_RA          /* ra (off 124) */
-        FAULT_STORE INT_SAVED_PC    /* pc (off 128) = bytepc computed above */
+        FAULT_STORE .Lfault_bytepc  /* pc (off 128) = bytepc computed above */
 
         /* syscall_nr (off 136) = -1 (store +1 so PT_REG_GET reads -1); skip rte_pc,
          * which subleq_trap() fills in from the entry snapshot below */
