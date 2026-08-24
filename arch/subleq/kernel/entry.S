@@ -43,6 +43,21 @@
  */
 subleq_irq_entry:
         /*
+         * Save INT_Z before anything reads or writes it.
+         *
+         * The self-interrupt check below computes -PC through INT_Z, which is safe when the
+         * interrupted code is this handler (INT_Z is IRQ-only scratch) and destructive when it is
+         * subleq_fault_entry, which keeps INT_Z live across its own instructions. The check cannot
+         * know which case it is in until it has already done the arithmetic, so the value is kept
+         * here and restored on the way out through .Lin_hazard.
+         *
+         * Stored negated, because a subleq copy is a subtraction: saved_z = 0 - INT_Z leaves
+         * INT_Z itself untouched, which is the whole point.
+         */
+        .word   .Lhazard_saved_z, .Lhazard_saved_z, .+4   /* saved_z = 0      */
+        .word   INT_Z, .Lhazard_saved_z, .+4              /* saved_z = -INT_Z */
+
+        /*
          * PHASE -1: SELF-INTERRUPT DETECTION
          *
          * Check if we interrupted our own handler code. This happens when
@@ -102,6 +117,10 @@ subleq_irq_entry:
          * and is dead after this jump, so use it as the branch cell — do NOT touch
          * INT_Z, which the fault entry keeps live across its own instructions.
          */
+        /* Put INT_Z back first: if the interrupted code is subleq_fault_entry, it is about to
+         * use INT_Z and expects its own value there, not the -PC this check left behind. */
+        .word   INT_Z, INT_Z, .+4                         /* INT_Z = 0                */
+        .word   .Lhazard_saved_z, INT_Z, .+4              /* INT_Z = -(-INT_Z) = INT_Z */
         .word   ZERO, .Lhazard_scratch, INT_SAVED_PC | INDIRECT
 
 .Lphase0a_start:
@@ -3097,6 +3116,8 @@ __subleq_syscall:
 /* Phase -1 self-interrupt detection constants */
 .Lhazard_scratch:
         .word   0               /* Dedicated scratch for hazard range check */
+.Lhazard_saved_z:
+        .word   0               /* INT_Z, negated, across the hazard check (see .Lin_hazard) */
 .Lconst_entry_start_m1:
         .word   subleq_irq_entry - 1   /* Lower bound (exclusive) for range check */
 .Lconst_entry_size:
