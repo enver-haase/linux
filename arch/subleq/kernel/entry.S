@@ -2032,6 +2032,23 @@ ret_from_fork:
 .Lrff_jump_user:
 #ifdef CONFIG_MMU
         /*
+         * Give the child its USER return address back before entering user mode.
+         *
+         * SW_Z still holds -pt_regs (set in .Lrff_load_r20) and RA is dead, so RA can carry the
+         * pointer one last time. See the file this patch came from for the failure it fixes:
+         * without this the child runs with RA = .Lrff_user_return, a kernel address.
+         */
+        .word   REG_RA, REG_RA, .+4                  /* RA = 0                          */
+        .word   SW_Z, REG_RA, .+4                    /* RA = -(-pt_regs) = pt_regs       */
+        .word   .Lconst_neg124, REG_RA, .+4          /* RA = &pt_regs->ra                */
+        .word   .Lrff_ra_a, .Lrff_ra_a, .+4          /* a = 0                            */
+        .word   REG_RA | INDIRECT, .Lrff_ra_a, .+4   /* a = -(-ra) = +ra                 */
+        .word   .Lrff_ra_b, .Lrff_ra_b, .+4          /* b = 0                            */
+        .word   .Lrff_ra_a, .Lrff_ra_b, .+4          /* b = -ra                          */
+        .word   REG_RA, REG_RA, .+4                  /* RA = 0                           */
+        .word   .Lrff_ra_b, REG_RA, .+4              /* RA = -(-ra) = the user's RA      */
+
+        /*
          * MMU: a fork/clone child must ENTER MODE_USER via CR_RTE — a raw
          * indirect jump would stay in supervisor mode (same bug fixed in
          * jump_to_userspace). REG_T15 holds the resume PC as a WORD index
@@ -2057,6 +2074,10 @@ ret_from_fork:
         .word   -.Lrff_loop
 .Lrff_user_ret_neg:
         .word   -.Lrff_user_return
+.Lrff_ra_a:
+        .word   0               /* scratch: the child's user RA, positive  */
+.Lrff_ra_b:
+        .word   0               /* scratch: the same, negated for the move */
 
 .size ret_from_fork, .-ret_from_fork
 
