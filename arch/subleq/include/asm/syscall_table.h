@@ -21,3 +21,6 @@
 
 /* Include the generic syscall table */
 #include <uapi/asm-generic/unistd.h>
+
+/* ... and the arch-specific tail (see uapi/asm/unistd.h for why this one exists) */
+__SYSCALL(__NR_subleq_atomic_xchg, sys_subleq_atomic_xchg)

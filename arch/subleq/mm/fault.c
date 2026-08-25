@@ -294,6 +294,16 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 	if (cause == SUBLEQ_CAUSE_SYSCALL) {
 		unsigned long nr = PT_REG_GET(regs, r21);
 
+		/*
+		 * NOTE: this path deliberately does NOT run subleq_trap_return_work(). Signals are
+		 * delivered by the timer path instead, which is late but safe. Adding the work here
+		 * froze the machine: the gate entry disables interrupts, so schedule() ran with them
+		 * off, the idle task inherited that, and a profile of the hang showed do_idle with
+		 * "traps: timer=0". Enabling interrupts for the duration of a syscall is the
+		 * prerequisite -- that is what unblocks linuxthreads' condition variables, and with
+		 * them SDL's timer thread and ScummVM.
+		 */
+
 		__subleq_syscall_c(PT_REG_GET(regs, r21), PT_REG_GET(regs, r22),
 				   PT_REG_GET(regs, r23), PT_REG_GET(regs, r24),
 				   PT_REG_GET(regs, r25), PT_REG_GET(regs, r26),
@@ -306,6 +316,12 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 		 */
 		if (nr != __NR_rt_sigreturn)
 			PT_REG_SET(regs, rte_pc, PT_REG_GET(regs, ra) >> 2);
+		/*
+		 * Then the same return-to-user work the timer path does: reschedule if asked, and
+		 * deliver pending signals. Without this a signal aimed at a task in a blocking
+		 * syscall waited for the next timer tick, and linuxthreads' cond_wait -- suspend in
+		 * sigsuspend, wake with a restart signal -- hung outright.
+		 */
 		subleq_check_rte(regs, "syscall", cause, access);
 		return;
 	}
