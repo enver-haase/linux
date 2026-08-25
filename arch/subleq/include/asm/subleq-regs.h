@@ -62,6 +62,35 @@
 .set REG_R30, REG_BASE + 136
 .set REG_R31, REG_BASE + 140
 
+/*
+ * THE ABI INVARIANT THAT IS EASIEST TO BREAK: Z IS ZERO ON ENTRY TO A FUNCTION.
+ *
+ * Not a convention anyone has to remember to follow -- a call IS the instruction that establishes
+ * it: "subleq Z, Z, target" zeroes Z and jumps, and a return does the same through RA. The
+ * compiler depends on it (SubleqAsmPrinter: "Z is guaranteed clear at function entry") and elides
+ * Z-clears accordingly, because Z is the cell every generated store goes through:
+ *
+ *      Z   -= src      ; Z = -value
+ *      dst -= dst      ; dst = 0
+ *      dst -= Z        ; dst = value
+ *
+ * An explicit "Z -= Z" appears only where the compiler knows Z is dirty from an earlier sequence
+ * in the same function. So ANY entry into user code that does not go through a call instruction --
+ * and this kernel synthesises several -- must establish Z = 0 itself:
+ *
+ *   setup_rt_frame()   a signal handler is a call we invent, from wherever the task happened to
+ *                      be, which is usually mid-sequence with a partial value in Z. Sets Z = 0.
+ *                      Before it did: a task spinning on a volatile flag received counter + signum
+ *                      in that flag, because the loop had left -counter in Z.
+ *   start_thread()     memsets pt_regs, so Z = 0 comes for free. Keep it that way.
+ *   ret_from_fork      resumes mid-function with the parent's context: inheriting Z is CORRECT
+ *                      here, and zeroing it would be the bug.
+ *   rt_sigreturn       restores Z from the sigcontext so the interrupted sequence can finish.
+ *
+ * The same applies to the other cells below: ZERO must contain zero, and under MMU the register
+ * file is a user-accessible page, so nothing faults if a guest writes to it -- it just breaks.
+ */
+
 /* Read-only zero constant */
 .set ZERO, REG_BASE + 144
 
