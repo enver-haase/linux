@@ -314,11 +314,14 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 		 * timer path rather than here. Both are wrong in principle and both are load-bearing
 		 * today; the order to fix them in, learned the hard way:
 		 *
-		 * 1. subleq_irq_entry saves the interrupt handler in INT_Z -- ONE GLOBAL CELL (entry.S,
-		 *    around line 134) -- zeroes m[0], and restores from that same cell on the way out.
-		 *    With interrupts enabled during a syscall, a timer landing inside another entry
-		 *    overwrites it, the outer restore writes the wrong value, and interrupts never come
-		 *    back: the machine sits in do_idle with no ticks. Make that save per-nesting-level.
+		 * 1. The interrupt entry uses single global cells: it returns through INT_SAVED_PC,
+		 *    which is m[1] -- the VM writes the interrupted PC there on EVERY interrupt, before
+		 *    any handler instruction runs -- and keeps the saved handler in INT_SAVED_HANDLER,
+		 *    m[8], which asm/irqflags.h also uses. Neither survives nesting, and enabling
+		 *    interrupts inside the kernel is what creates nesting. Measured consequence, with
+		 *    the host watchdog naming it: the kernel ends up executing FREED INITMEM (a PC inside
+		 *    memmap_init_range) with m[0] = 0, i.e. returned somewhere wild -- not merely idle.
+		 *    Give both a per-nesting-level home first.
 		 * 2. Then interrupts can be enabled here.
 		 * 3. Then subleq_trap_return_work() can run at syscall exit, which is what delivers a
 		 *    signal to a task sitting in a blocking call -- and that is what linuxthreads
