@@ -315,6 +315,23 @@ static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
 	 */
 	PT_REG_SET(regs, rte_pc, (unsigned long)ksig->ka.sa.sa_handler >> 2);
 	PT_REG_SET(regs, r21, ksig->sig);  /* First argument: signal number */
+	/*
+	 * Z must be ZERO on entry to a function on this architecture. It is the scratch cell every
+	 * generated store goes through -- "Z -= src; dst = 0; dst -= Z" -- and the compiler only
+	 * emits an explicit "Z -= Z" when it knows Z is dirty from a previous sequence in the same
+	 * function. At a function boundary it simply assumes zero.
+	 *
+	 * A signal handler is a call this kernel SYNTHESISES, from wherever the task happened to be,
+	 * and that point is frequently in the middle of a sequence with Z holding a partial value. So
+	 * the invariant has to be established here, exactly as it is for a new thread. Without it the
+	 * handler's first store writes (value - Z_leftover): measured with a task spinning on a
+	 * volatile flag, the flag came back holding the loop counter plus the signal number, because
+	 * the interrupted loop had left -counter in Z.
+	 *
+	 * The interrupted Z is in the sigcontext and comes back at rt_sigreturn, so the task resumes
+	 * its half-finished sequence with the value it expects.
+	 */
+	PT_REG_SET(regs, z, 0);
 
 	/*
 	 * For SA_SIGINFO handlers, set up additional arguments:
