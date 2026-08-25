@@ -303,6 +303,17 @@ static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
 	}
 
 	PT_REG_SET(regs, pc, (unsigned long)ksig->ka.sa.sa_handler);
+	/*
+	 * ... and the RTE target, which is what actually resumes this task. pc and rte_pc are two
+	 * different things here: pc is a byte address in pt_regs, rte_pc is the WORD index the trap
+	 * exit writes to CR_RTE. The timer path happened to work because subleq_trap_return_work()
+	 * copies pc into rte_pc when a handler was installed; the syscall path calls do_signal()
+	 * from __subleq_syscall_c(), where nothing did -- so the frame was built, the handler
+	 * address was stored in pc, and the task resumed at the instruction after the gate as if no
+	 * signal had happened. Setting it here covers every caller, and sigreturn restores the
+	 * saved rte_pc from the frame.
+	 */
+	PT_REG_SET(regs, rte_pc, (unsigned long)ksig->ka.sa.sa_handler >> 2);
 	PT_REG_SET(regs, r21, ksig->sig);  /* First argument: signal number */
 
 	/*

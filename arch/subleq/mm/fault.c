@@ -183,6 +183,8 @@ no_context:
 extern asmlinkage long __subleq_syscall_c(long nr, long a1, long a2, long a3,
 					  long a4, long a5, long a6);
 extern unsigned long subleq_fault_saved_pc;	/* kernel/entry.S */
+#define SUBLEQ_USER_GATE_ADDR	0x8000UL	/* mm/init.c: subleq_set_sysgate(0x2000) words */
+
 extern bool do_signal(struct pt_regs *regs);	/* kernel/signal.c */
 
 /*
@@ -220,7 +222,6 @@ static void subleq_trap_return_work(struct pt_regs *regs)
  * caught the signal trampoline running from kernel text, which killed the shell after every
  * command that produced a SIGCHLD.
  */
-#define SUBLEQ_USER_GATE_ADDR	0x8000UL	/* mm/init.c: subleq_set_sysgate(0x2000) words */
 static void subleq_check_rte(struct pt_regs *regs, const char *where,
 			     unsigned long cause, unsigned long access)
 {
@@ -334,22 +335,29 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 		 * its own, without the rest, breaks forks -- so all of this moves together.
 		 */
 
+		/*
+		 * The resume target has to be correct BEFORE the call, not after it. __subleq_syscall_c()
+		 * delivers signals itself (do_signal at syscall exit), and setup_rt_frame() saves the
+		 * CURRENT rte_pc into the signal frame as the place to come back to. At trap entry that
+		 * value is the gate itself -- so a signal raised by the syscall (kill(getpid(), ...) is
+		 * the smallest case) came back to the gate, re-ran the same syscall, raised the same
+		 * signal, for ever: measured 27658 syscall traps in 45 s, looping between the handler and
+		 * the trampoline on the signal stack.
+		 *
+		 * rt_sigreturn is the exception: it restores the target its own frame carries.
+		 */
+		if (nr != __NR_rt_sigreturn)
+			PT_REG_SET(regs, rte_pc, PT_REG_GET(regs, ra) >> 2);
 		__subleq_syscall_c(PT_REG_GET(regs, r21), PT_REG_GET(regs, r22),
 				   PT_REG_GET(regs, r23), PT_REG_GET(regs, r24),
 				   PT_REG_GET(regs, r25), PT_REG_GET(regs, r26),
 				   PT_REG_GET(regs, r27));
 		/*
-		 * Resume in user mode at the instruction after the gate call -- except for
-		 * rt_sigreturn, which restores the interrupted context itself, including the resume
-		 * target it saved in its signal frame.
-		 */
-		if (nr != __NR_rt_sigreturn)
-			PT_REG_SET(regs, rte_pc, PT_REG_GET(regs, ra) >> 2);
-		/*
-		 * Then the same return-to-user work the timer path does: reschedule if asked, and
-		 * deliver pending signals. Without this a signal aimed at a task sitting in a blocking
-		 * syscall waited for the next timer tick, and linuxthreads' cond_wait -- suspend in
-		 * sigsuspend, wake with a restart signal -- hung outright.
+		 * Nothing to do on the way out: the target was set before the call, and anything that
+		 * legitimately redirected the task since then -- a signal handler installed by
+		 * setup_rt_frame(), or rt_sigreturn restoring what its frame saved -- must be left
+		 * alone. Overwriting it here unconditionally is what swallowed every signal delivered
+		 * at syscall exit.
 		 */
 		subleq_check_rte(regs, "syscall", cause, access);
 		return;
