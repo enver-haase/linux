@@ -18,6 +18,7 @@
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/fb.h>
+#include <linux/sched.h>
 #include <linux/io.h>
 #include <linux/console.h>
 #include <linux/fbcon.h>
@@ -236,6 +237,22 @@ static void subleqfb_copyarea(struct fb_info *info, const struct fb_copyarea *ar
  */
 static struct fb_var_screeninfo subleqfb_console_var;
 static struct fb_info *subleqfb_restore_target;
+/*
+ * How many userspace programs have the framebuffer open. fbcon does not go through fb_open, so
+ * zero means "whatever mode is set now is the console's", which is what makes it safe to snapshot.
+ */
+static int subleqfb_users;
+static int subleqfb_restore_tries;
+/*
+ * How many times to come back and check. The exiting program keeps setting the mode for a few
+ * milliseconds after its fd is gone (its own restore, then fbcon re-applying the size it adopted
+ * when the program resized the console), so a single restore at release time gets overwritten.
+ */
+#define SUBLEQFB_RESTORE_TRIES  6
+#define SUBLEQFB_RESTORE_DELAY  msecs_to_jiffies(120)
+
+static void subleqfb_restore_fn(struct work_struct *work);
+static DECLARE_DELAYED_WORK(subleqfb_restore_work, subleqfb_restore_fn);
 
 static void subleqfb_restore_fn(struct work_struct *work)
 {
@@ -245,7 +262,18 @@ static void subleqfb_restore_fn(struct work_struct *work)
 
         if (!info)
                 return;
+        /* Someone opened the device again while this was queued: leave the mode to them. */
+        if (subleqfb_users)
+                return;
+        /* Already back? Then nothing to do, and no need to check again. */
+        if (info->var.xres == subleqfb_console_var.xres &&
+            info->var.yres == subleqfb_console_var.yres) {
+                subleqfb_restore_tries = 0;
+                return;
+        }
         writel(++restores, (void __iomem *)SUBLEQ_REG_FB_RESTORES);
+        pr_info("subleq_fb: restoring the console to %ux%u\n",
+                subleqfb_console_var.xres, subleqfb_console_var.yres);
         var = subleqfb_console_var;
         /*
          * FORCE, and NOW. fb_set_var() has two silent exits: it returns success without doing
@@ -266,19 +294,45 @@ static void subleqfb_restore_fn(struct work_struct *work)
         }
         unlock_fb_info(info);
         console_unlock();
+
+        /* Come back and make sure it stuck. */
+        if (subleqfb_restore_tries > 0) {
+                subleqfb_restore_tries--;
+                schedule_delayed_work(&subleqfb_restore_work, SUBLEQFB_RESTORE_DELAY);
+        }
 }
 
-static DECLARE_WORK(subleqfb_restore_work, subleqfb_restore_fn);
+
+
+static int subleqfb_open(struct fb_info *info, int user)
+{
+        /*
+         * Only count. The snapshot is taken in set_par when no user program has the device, which
+         * is the only moment the mode is known to be the console's -- a program that opens, closes
+         * and opens again (fbdoom does) would otherwise have its own mode recorded as the one to
+         * come back to.
+         */
+        if (user)
+                subleqfb_users++;
+
+        return 0;
+}
 
 static int subleqfb_release(struct fb_info *info, int user)
 {
         static u32 releases;
 
-        if (user && (info->var.xres != subleqfb_console_var.xres ||
-                     info->var.yres != subleqfb_console_var.yres)) {
+        /*
+         * Schedule the check whenever the last user closes, whatever the mode looks like right
+         * now: fbdoom puts the mode back itself just before closing, so at this instant it looks
+         * correct, and fbcon then re-applies the size it adopted when the game resized the console
+         * -- after the close. Deciding here would mean deciding too early; the worker looks again.
+         */
+        if (user && subleqfb_users > 0 && --subleqfb_users == 0) {
                 writel(++releases, (void __iomem *)SUBLEQ_REG_FB_RELEASES);
                 subleqfb_restore_target = info;
-                schedule_work(&subleqfb_restore_work);
+                subleqfb_restore_tries = SUBLEQFB_RESTORE_TRIES;
+                schedule_delayed_work(&subleqfb_restore_work, SUBLEQFB_RESTORE_DELAY);
         }
         return 0;
 }
@@ -324,10 +378,19 @@ static int subleqfb_set_par(struct fb_info *info)
 
         writel(++set_pars, (void __iomem *)SUBLEQ_REG_FB_SETPARS);
         info->fix.line_length = info->var.xres * (SUBLEQFB_BPP / 8);
-        subleqfb_console_var = info->var;      /* the mode to come back to */
+        /*
+         * Record the mode as the console-s only when a KERNEL thread sets it with no user program
+         * holding the device. "No user fds" alone is not enough: an exiting program sets the mode
+         * once more after its fd is gone (its own restore, then fbcon re-applying the size it
+         * adopted), and recording that made the restore a no-op -- the console stayed at 320x200
+         * after leaving DOOM. Kernel threads have no mm; the console layer runs in one.
+         */
+        if (!subleqfb_users && !current->mm)
+                subleqfb_console_var = info->var;
         subleqfb_publish(info);
-        pr_info("subleq_fb: mode %ux%u, stride %u bytes\n",
-                info->var.xres, info->var.yres, info->fix.line_length);
+        pr_info("subleq_fb: mode %ux%u, stride %u bytes (by %s, %d user fds)\n",
+                info->var.xres, info->var.yres, info->fix.line_length,
+                current->comm, subleqfb_users);
         return 0;
 }
 
@@ -427,6 +490,7 @@ static const struct fb_ops subleqfb_ops = {
 	.fb_setcolreg   = subleqfb_setcolreg,
 	.fb_check_var   = subleqfb_check_var,
 	.fb_set_par     = subleqfb_set_par,
+	.fb_open        = subleqfb_open,
 	.fb_release     = subleqfb_release,
 	.fb_mmap        = subleqfb_mmap,
 	/* Custom word-only drawing operations */
