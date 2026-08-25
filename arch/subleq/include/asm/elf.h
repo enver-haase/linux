@@ -39,8 +39,20 @@ typedef unsigned long elf_fpregset_t;
 /*
  * Check if this is a Subleq ELF binary.
  */
+/*
+ * Accept static ET_EXEC only when there is an MMU.
+ *
+ * There is no dynamic linker for this architecture. On NOMMU the kernel is the linker
+ * (arch/subleq/kernel/binfmt_elf_subleq.c, built only for CONFIG_NOMMU); the MMU build uses the
+ * generic loader, which would map an ET_DYN image and jump to its entry point with every
+ * relocation still unresolved. That did not merely kill the process -- it halted the machine.
+ * Refusing here turns it into a plain ENOEXEC. Porting the dynamic path is worth doing (a
+ * dynamically linked launcher is 7 KB where the static one is 1.5 MB, and ScummVM is 57 MB mostly
+ * because libc++ is copied into it), and this check is what that work removes.
+ */
 #define elf_check_arch(x) \
-	((x)->e_machine == EM_SUBLEQ && (x)->e_ident[EI_CLASS] == ELFCLASS32)
+	((x)->e_machine == EM_SUBLEQ && (x)->e_ident[EI_CLASS] == ELFCLASS32 && \
+	 (!IS_ENABLED(CONFIG_MMU) || (x)->e_type == ET_EXEC))
 
 /*
  * Memory map for this architecture

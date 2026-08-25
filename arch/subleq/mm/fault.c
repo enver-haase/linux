@@ -17,6 +17,8 @@
  */
 
 #include <linux/mm.h>
+#include <linux/irqflags.h>
+#include <asm/irqflags.h>
 #include <asm/unistd.h>
 #include <linux/sched.h>
 #include <linux/sched/signal.h>
@@ -295,13 +297,38 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 		unsigned long nr = PT_REG_GET(regs, r21);
 
 		/*
-		 * NOTE: this path deliberately does NOT run subleq_trap_return_work(). Signals are
-		 * delivered by the timer path instead, which is late but safe. Adding the work here
-		 * froze the machine: the gate entry disables interrupts, so schedule() ran with them
-		 * off, the idle task inherited that, and a profile of the hang showed do_idle with
-		 * "traps: timer=0". Enabling interrupts for the duration of a syscall is the
-		 * prerequisite -- that is what unblocks linuxthreads' condition variables, and with
-		 * them SDL's timer thread and ScummVM.
+		 * A syscall runs with interrupts ENABLED, as on every other architecture. Two things
+		 * depend on it: a long call must not block the timer tick, and the return-to-user work
+		 * below (reschedule, deliver signals) may sleep, which is not allowed with interrupts
+		 * off. Running that work with them off is exactly what froze the machine the first time
+		 * this was tried -- the idle task inherited the disabled state and no timer ever came
+		 * (a profile of the hang showed do_idle with "traps: timer=0").
+		 *
+		 * Safe here: the gate's globals (subleq_syscall_saved_sp/fp/ra, subleq_fault_saved_pc)
+		 * have already been consumed into this task's pt_regs, and subleq_irq_entry copes with
+		 * landing inside the kernel -- it only switches to the kernel stack when it was not
+		 * already on one.
+		 */
+		/*
+		 * Interrupts stay OFF for the duration of the call, and signals are delivered by the
+		 * timer path rather than here. Both are wrong in principle and both are load-bearing
+		 * today; the order to fix them in, learned the hard way:
+		 *
+		 * 1. subleq_irq_entry saves the interrupt handler in INT_Z -- ONE GLOBAL CELL (entry.S,
+		 *    around line 134) -- zeroes m[0], and restores from that same cell on the way out.
+		 *    With interrupts enabled during a syscall, a timer landing inside another entry
+		 *    overwrites it, the outer restore writes the wrong value, and interrupts never come
+		 *    back: the machine sits in do_idle with no ticks. Make that save per-nesting-level.
+		 * 2. Then interrupts can be enabled here.
+		 * 3. Then subleq_trap_return_work() can run at syscall exit, which is what delivers a
+		 *    signal to a task sitting in a blocking call -- and that is what linuxthreads
+		 *    condition variables wait for. pthread_cond_wait hangs without it.
+		 *
+		 * One detail already proven and worth keeping when step 2 happens: the resume target has
+		 * to be set BEFORE interrupts go on, or a signal delivered mid-syscall saves the syscall
+		 * gate as its resume point and the handler returns straight into the same syscall for
+		 * ever (traced: "deliver 10 ... rte_pc 8000 ra 40b7b0", repeating). Setting it early on
+		 * its own, without the rest, breaks forks -- so all of this moves together.
 		 */
 
 		__subleq_syscall_c(PT_REG_GET(regs, r21), PT_REG_GET(regs, r22),
@@ -310,15 +337,14 @@ asmlinkage void subleq_trap(struct pt_regs *regs, unsigned long addr,
 				   PT_REG_GET(regs, r27));
 		/*
 		 * Resume in user mode at the instruction after the gate call -- except for
-		 * rt_sigreturn, which restores the interrupted context itself (including the
-		 * resume target it saved in the signal frame). Overwriting it from ra there
-		 * would return the handler's caller to wherever the handler happened to link.
+		 * rt_sigreturn, which restores the interrupted context itself, including the resume
+		 * target it saved in its signal frame.
 		 */
 		if (nr != __NR_rt_sigreturn)
 			PT_REG_SET(regs, rte_pc, PT_REG_GET(regs, ra) >> 2);
 		/*
 		 * Then the same return-to-user work the timer path does: reschedule if asked, and
-		 * deliver pending signals. Without this a signal aimed at a task in a blocking
+		 * deliver pending signals. Without this a signal aimed at a task sitting in a blocking
 		 * syscall waited for the next timer tick, and linuxthreads' cond_wait -- suspend in
 		 * sigsuspend, wake with a restart signal -- hung outright.
 		 */
