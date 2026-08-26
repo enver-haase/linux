@@ -25,6 +25,7 @@
 #include <linux/miscdevice.h>
 #include <linux/slab.h>
 #include <linux/mutex.h>
+#include <linux/log2.h>
 #include <linux/delay.h>
 #include <linux/uaccess.h>
 #include <linux/init.h>
@@ -66,6 +67,23 @@ static DEFINE_MUTEX(pcm_lock);		/* serializes /dev/dsp writers + rate ioctl */
  * cannot keep up with). Better a silent machine than a hung audio thread.
  */
 static bool pcm_no_consumer;
+
+/*
+ * How much audio may be queued ahead of the card, in frames -- the buffering the APPLICATION asks
+ * for through SNDCTL_DSP_SETFRAGMENT, which is exactly what that ioctl is for.
+ *
+ * A constant here cannot serve one image running two games. ScummVM's ADL engine makes 100 ms beeps
+ * and wants the queue SHORT, because everything it plays is heard late by exactly this depth:
+ * measured on its bell, a full ring plus a 500 ms host buffer was ~2000 ms late, a quarter ring plus
+ * 150 ms was 560 ms, an eighth plus 70 ms was 313 ms. DOOM wants the opposite -- it produces only
+ * 41-54% of the frames the card consumes, so a short queue does not buy it tight timing, it buys
+ * dropouts -- and it says so through the same ioctl (see doom/src/device/i_snd_sound.c).
+ *
+ * The floor is not taste but stalls: while the guest is frozen -- a level load, a long read -- this
+ * queue is all the card has left to play, so a target below the length of a stall becomes an
+ * audible hole. The default is the middle of the range; anything that cares says so.
+ */
+static u32 pcm_target_frames = PCM_RING_FRAMES / 8;      /* ~186 ms at 11025 Hz */
 
 static u32 pcm_free_frames(void)
 {
@@ -114,11 +132,14 @@ static ssize_t dsp_write(struct file *f, const char __user *buf, size_t count,
 		u32 room  = pcm_free_frames();
 
 		/*
-		 * Wait for the card, which is what makes a write() paced by playback instead of by how
-		 * fast this machine can mix. Leave a quarter of the ring as the working margin so the
-		 * host always has something to play while we are away.
+		 * Wait for the card -- and wait for LATENCY, not merely for room. Waiting only until the
+		 * chunk fits lets a mixer keep the whole ring queued ahead, and a full ring is 16384
+		 * frames = 1.49 s at 11025 Hz: sounds arrive correct and audible, seconds after the
+		 * moment that caused them (measured: a bell 2 s late). So keep only what the
+		 * application asked for outstanding.
 		 */
-		while (room < chunk && !pcm_no_consumer) {
+		while ((room < chunk || room < PCM_RING_FRAMES - pcm_target_frames)
+		       && !pcm_no_consumer) {
 			if (f->f_flags & O_NONBLOCK) {
 				if (done_bytes)
 					goto out;	/* partial write is a complete answer */
@@ -196,6 +217,36 @@ static long dsp_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 	case SNDCTL_DSP_CHANNELS:
 		val = 2;			/* always 2 channels */
 		return put_user(val, p);
+
+	case SNDCTL_DSP_SETFRAGMENT: {
+		/*
+		 * The OSS way for an application to choose its own latency: the argument packs
+		 * (max_fragments << 16) | log2(fragment_bytes). Take the product as what it wants
+		 * outstanding, clamp it to what this ring can honour, and write back what was granted --
+		 * the ioctl is read/write, and a caller told what it got can adapt.
+		 */
+		int val, frag_log, frags;
+		u32 frames;
+
+		if (get_user(val, (int __user *)arg))
+			return -EFAULT;
+		frag_log = val & 0xffff;
+		frags    = (val >> 16) & 0x7fff;
+		if (frag_log < 4 || frag_log > 20 || frags < 2)
+			return -EINVAL;
+
+		frames = ((u32)frags << frag_log) / PCM_FRAME_BYTES;
+		if (frames < 512)                 frames = 512;                  /* ~46 ms  */
+		if (frames > PCM_RING_FRAMES / 2) frames = PCM_RING_FRAMES / 2;  /* ~740 ms */
+		pcm_target_frames = frames;
+		pr_info("subleq_sound: %u frames (%u ms at %u Hz) of buffering, asked for by the application\n",
+			frames, frames * 1000 / pcm_rate, pcm_rate);
+
+		val = (2 << 16) | ilog2(frames * PCM_FRAME_BYTES / 2);
+		if (put_user(val, (int __user *)arg))
+			return -EFAULT;
+		return 0;
+	}
 
 	case SNDCTL_DSP_GETBLKSIZE:
 		val = PCM_RING_BYTES / 4;	/* a reasonable fragment size */
