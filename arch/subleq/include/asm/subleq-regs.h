@@ -167,5 +167,6 @@
 .set MMIO_PCM_FRAMES, 276  /* word 69 : PCM ring capacity in stereo frames          */
 .set MMIO_PCM_WRITE,  280  /* word 70 : PCM producer counter (frames enqueued)      */
 .set MMIO_PCM_RATE,   284  /* word 71 : PCM sample rate in Hz                       */
+.set MMIO_PCM_READ,   288  /* word 72 : HOST consumer counter (frames drained)      */
 
 #endif /* _ASM_SUBLEQ_REGS_H */

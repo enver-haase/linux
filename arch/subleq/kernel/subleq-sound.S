@@ -79,6 +79,28 @@ subleq_pcm_set_base:
 	.size	subleq_pcm_set_base, . - subleq_pcm_set_base
 
 /*
+ * unsigned long subleq_pcm_get_read(void)
+ *
+ * Read the HOST's consumer counter: total stereo frames it has drained and played. This is what
+ * makes flow control possible at all -- with it the driver knows how much of the ring is still
+ * unplayed, and can make SNDCTL_DSP_GETOSPACE tell the truth and write() wait. Without it the
+ * driver claimed the whole ring was free to every caller, and a mixer that believed it ran
+ * nineteen times faster than the card, so its sounds were heard minutes after the game made them.
+ *
+ * Zero means no consumer: a VM without a sound card never writes this cell, and the driver treats
+ * a counter that never moves as "nobody is listening" and stops waiting.
+ */
+	.globl subleq_pcm_get_read
+	.type subleq_pcm_get_read, @function
+subleq_pcm_get_read:
+	.word	REG_T0, REG_T0, .+4		/* T0 = 0                               */
+	.word	MMIO_PCM_READ, REG_T0, .+4	/* T0 = -read                           */
+	.word	REG_R20, REG_R20, .+4		/* return value = 0                     */
+	.word	REG_T0, REG_R20, .+4		/* return value = +read                 */
+	.word	REG_T0, REG_T0, REG_RA | INDIRECT /* T0 = 0 (branch) -> *RA             */
+	.size	subleq_pcm_get_read, . - subleq_pcm_get_read
+
+/*
  * void subleq_pcm_set_write(unsigned long total_frames)
  *
  * Publish the producer counter: the total number of stereo frames the driver

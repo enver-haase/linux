@@ -25,6 +25,7 @@
 #include <linux/miscdevice.h>
 #include <linux/slab.h>
 #include <linux/mutex.h>
+#include <linux/delay.h>
 #include <linux/uaccess.h>
 #include <linux/init.h>
 #include <linux/soundcard.h>
@@ -35,6 +36,7 @@ extern void subleq_opl_write(unsigned long packed);
 extern void subleq_pcm_set_base(unsigned long phys_word_index);
 extern void subleq_pcm_set_frames(unsigned long frames);
 extern void subleq_pcm_set_write(unsigned long total_frames);
+extern unsigned long subleq_pcm_get_read(void);   /* host consumer counter: frames played */
 extern void subleq_pcm_set_rate(unsigned long hz);
 
 /*
@@ -56,6 +58,32 @@ static u32 pcm_rate = PCM_RATE_DEFAULT;
 static DEFINE_MUTEX(pcm_lock);		/* serializes /dev/dsp writers + rate ioctl */
 
 /* ------------------------------------------------------------------ /dev/dsp */
+
+/*
+ * How much of the ring the host has finished with. A VM with no sound card never writes the
+ * consumer counter, so a counter still at zero after we have queued a whole ring means nobody is
+ * draining: from then on we stop waiting and behave as before (write, and let the VM drop what it
+ * cannot keep up with). Better a silent machine than a hung audio thread.
+ */
+static bool pcm_no_consumer;
+
+static u32 pcm_free_frames(void)
+{
+	unsigned long played = subleq_pcm_get_read();
+	u32 queued;
+
+	if (pcm_no_consumer)
+		return PCM_RING_FRAMES;
+	if (played == 0 && pcm_write_total > PCM_RING_FRAMES) {
+		pcm_no_consumer = true;		/* a whole ring queued and nothing drained */
+		pr_info("subleq_sound: no consumer for the PCM ring -- writes will not block\n");
+		return PCM_RING_FRAMES;
+	}
+	queued = (u32)(pcm_write_total - played);
+	if (queued > PCM_RING_FRAMES)		/* host lapped or counters crossed */
+		return 0;
+	return PCM_RING_FRAMES - queued;
+}
 
 static ssize_t dsp_write(struct file *f, const char __user *buf, size_t count,
 			 loff_t *ppos)
@@ -83,6 +111,35 @@ static ssize_t dsp_write(struct file *f, const char __user *buf, size_t count,
 	while (frames) {
 		u32 pos = pcm_write_total % PCM_RING_FRAMES;
 		u32 chunk = min(frames, (size_t)(PCM_RING_FRAMES - pos));
+		u32 room  = pcm_free_frames();
+
+		/*
+		 * Wait for the card, which is what makes a write() paced by playback instead of by how
+		 * fast this machine can mix. Leave a quarter of the ring as the working margin so the
+		 * host always has something to play while we are away.
+		 */
+		while (room < chunk && !pcm_no_consumer) {
+			if (f->f_flags & O_NONBLOCK) {
+				if (done_bytes)
+					goto out;	/* partial write is a complete answer */
+				ret = -EAGAIN;
+				goto out;
+			}
+			mutex_unlock(&pcm_lock);
+			msleep(4);		/* ~44 frames at 11 kHz: fine grain, no spinning */
+			if (signal_pending(current)) {
+				mutex_lock(&pcm_lock);
+				if (!done_bytes)
+					ret = -ERESTARTSYS;
+				goto out;
+			}
+			mutex_lock(&pcm_lock);
+			room = pcm_free_frames();
+		}
+		if (chunk > room && !pcm_no_consumer)
+			chunk = room;
+		if (chunk == 0)
+			break;
 
 		if (copy_from_user(pcm_ring + pos, buf + done_bytes,
 				   chunk * PCM_FRAME_BYTES)) {
@@ -94,6 +151,7 @@ static ssize_t dsp_write(struct file *f, const char __user *buf, size_t count,
 		frames -= chunk;
 	}
 
+out:
 	/* Publish the new producer position to the VM. */
 	subleq_pcm_set_write(pcm_write_total);
 
@@ -145,15 +203,18 @@ static long dsp_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 
 	case SNDCTL_DSP_GETOSPACE: {
 		/*
-		 * We cannot see the VM's consumer position, so advertise the
-		 * whole ring as free. This keeps callers non-blocking; the VM
-		 * drops the oldest frames if we run ahead.
+		 * Tell the truth: the free space is what the host has already played. This used to
+		 * advertise the whole ring unconditionally because the consumer position was not
+		 * visible; a mixer that believes it can always write more runs as fast as the machine
+		 * allows, which measured nineteen times real time for ScummVM -- its sounds arriving
+		 * minutes after the game made them.
 		 */
+		u32 free_frames = pcm_free_frames();
 		struct audio_buf_info info = {
-			.fragments   = 4,
+			.fragments   = free_frames / (PCM_RING_FRAMES / 4),
 			.fragstotal  = 4,
 			.fragsize    = PCM_RING_BYTES / 4,
-			.bytes       = PCM_RING_BYTES,
+			.bytes       = free_frames * PCM_FRAME_BYTES,
 		};
 		if (copy_to_user((void __user *)arg, &info, sizeof(info)))
 			return -EFAULT;
